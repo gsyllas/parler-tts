@@ -79,7 +79,12 @@ def wer(
     si_sdr_measures,
 ):
     metric = evaluate.load("wer")
-    asr_pipeline = pipeline(model=asr_model_name_or_path, device=device, chunk_length_s=25.0)
+    asr_pipeline = pipeline(
+        model=asr_model_name_or_path, 
+        device=device, 
+        chunk_length_s=25.0,
+        model_kwargs={"language": "greek", "task": "transcribe"}  # Added this line
+    )
 
     return_language = None
     if isinstance(asr_pipeline.model, WhisperForConditionalGeneration):
@@ -96,18 +101,13 @@ def wer(
     else:
         tokenizer = WhisperTokenizer.from_pretrained("openai/whisper-large-v3")
 
-    english_normalizer = tokenizer.normalize
-    basic_normalizer = tokenizer.basic_normalize
+    # Removed English-specific normalization, using basic_normalize for all cases
+    normalizer = tokenizer.basic_normalize
 
     normalized_predictions = []
     normalized_references = []
 
     for pred, ref in zip(transcriptions, prompts):
-        normalizer = (
-            english_normalizer
-            if isinstance(pred.get("chunks", None), list) and pred["chunks"][0].get("language", None) == "english"
-            else basic_normalizer
-        )
         norm_ref = normalizer(ref)
         if len(norm_ref) > 0:
             norm_pred = normalizer(pred["text"])
@@ -120,7 +120,6 @@ def wer(
     percent_clean_samples = 0
     if len(normalized_references) > 0:
         word_error = 100 * metric.compute(predictions=normalized_predictions, references=normalized_references)
-        
 
         if noise_level_to_compute_clean_wer and si_sdr_measures:
             si_sdr_measures = np.array(si_sdr_measures)
