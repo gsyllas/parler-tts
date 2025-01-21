@@ -66,9 +66,11 @@ from training.utils import (
 from training.arguments import ModelArguments, DataTrainingArguments, ParlerTTSTrainingArguments
 from training.data import load_multiple_datasets, DataCollatorParlerTTSWithPadding, DataCollatorEncodecWithPadding
 from training.eval import clap_similarity, wer, si_sdr
+from training.peft_utils import replace_linear_with_lora, replace_lora_with_linear
 
 logger = logging.getLogger(__name__)
 
+os.environ["WANDB_MODE"] = "offline"
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -339,6 +341,10 @@ def main():
         attn_implementation={"decoder": model_args.attn_implementation, "text_encoder": "eager"},
     )
 
+    if training_args.use_peft == True: 
+        logger.info('\n--Using PEFT, replacing layers--\n')
+        replace_linear_with_lora(model.decoder, lora_r=training_args.lora_r, lora_alpha=training_args.lora_alpha, lora_dropout=training_args.lora_dropout)
+    
     # enable gradient checkpointing if necessary
     if training_args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
@@ -772,6 +778,8 @@ def main():
     model, optimizer, lr_scheduler = accelerator.prepare(model, optimizer, lr_scheduler)
 
     num_examples = total_train_steps * train_batch_size * gradient_accumulation_steps
+    print_trainable_params(model) # print trainable params, for lora
+
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {num_examples}")
     logger.info("  Instantaneous batch size per device =" f" {per_device_train_batch_size}")
@@ -1243,6 +1251,13 @@ def main():
             break
 
     accelerator.end_training()
+
+def print_trainable_params(model):
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    non_trainable = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+    total_params = trainable + non_trainable
+    trainable_percent = 100 * trainable / total_params
+    print(f"Trainable: {trainable:,} | Non-trainable: {non_trainable:,} | Percent Trainable params: {trainable_percent:.2f}%")
 
 
 if __name__ == "__main__":
