@@ -70,7 +70,7 @@ from training.peft_utils import replace_linear_with_lora, replace_lora_with_line
 
 logger = logging.getLogger(__name__)
 
-os.environ["WANDB_MODE"] = "offline"
+# os.environ["WANDB_MODE"] = "offline"
 
 def main():
     # See all possible arguments in src/transformers/training_args.py

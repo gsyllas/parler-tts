@@ -80,10 +80,11 @@ def wer(
 ):
     metric = evaluate.load("wer")
     asr_pipeline = pipeline(
+        "automatic-speech-recognition",  # Specify task here
         model=asr_model_name_or_path, 
         device=device, 
         chunk_length_s=25.0,
-        model_kwargs={"language": "greek", "task": "transcribe"}  # Added this line
+        model_kwargs={"language": "greek"}  # Remove task from here
     )
 
     return_language = None
