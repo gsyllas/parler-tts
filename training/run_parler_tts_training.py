@@ -47,6 +47,7 @@ from transformers.utils import send_example_telemetry
 from accelerate import Accelerator, skip_first_batches
 from accelerate.utils import set_seed, AutocastKwargs, InitProcessGroupKwargs, TorchDynamoPlugin, DistributedDataParallelKwargs
 from accelerate.utils.memory import release_memory
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
 from parler_tts import (
     ParlerTTSConfig,
@@ -66,7 +67,6 @@ from training.utils import (
 from training.arguments import ModelArguments, DataTrainingArguments, ParlerTTSTrainingArguments
 from training.data import load_multiple_datasets, DataCollatorParlerTTSWithPadding, DataCollatorEncodecWithPadding
 from training.eval import clap_similarity, wer, si_sdr
-from training.peft_utils import replace_linear_with_lora, replace_lora_with_linear
 
 logger = logging.getLogger(__name__)
 
@@ -340,10 +340,29 @@ def main():
         trust_remote_code=data_args.trust_remote_code,
         attn_implementation={"decoder": model_args.attn_implementation, "text_encoder": "eager"},
     )
+    
+    print("Model named modules")
+    for name, _ in model.named_modules():
+        print(name)
 
-    if training_args.use_peft == True: 
-        logger.info('\n--Using PEFT, replacing layers--\n')
-        replace_linear_with_lora(model.decoder, lora_r=training_args.lora_r, lora_alpha=training_args.lora_alpha, lora_dropout=training_args.lora_dropout)
+    if training_args.use_lora:
+        target_modules = [
+            "k_proj", "v_proj", "q_proj", "out_proj",
+            "fc1", "fc2", "k", "v", "q", "o", "wi", "wo",
+            "encoder_attn.k_proj", "encoder_attn.v_proj",
+            "encoder_attn.q_proj", "encoder_attn.out_proj"
+        ]
+
+        config = LoraConfig(
+            r=training_args.lora_r,
+            lora_alpha=training_args.lora_alpha,
+            target_modules=target_modules,
+            lora_dropout=training_args.lora_dropout,
+            bias="none",
+        )
+        model.enable_input_require_grads()
+        model = get_peft_model(model, config)
+        model.print_trainable_parameters()
     
     # enable gradient checkpointing if necessary
     if training_args.gradient_checkpointing:

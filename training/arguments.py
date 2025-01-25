@@ -373,7 +373,7 @@ class ParlerTTSTrainingArguments(Seq2SeqTrainingArguments):
         default=None,
         metadata={"help": "Weights applied to each codebook."},
     )
-    use_peft: bool = field(
+    use_lora: bool = field(
         default=False,
         metadata={
             "help": "Flag to use parameter efficient fine-tuning, with LORA, for the decoder transformer. Default is without LORA"
