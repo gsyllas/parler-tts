@@ -441,7 +441,9 @@ def main():
                 batch["num_codebooks"] = num_codebooks
             elif "n_quantizers" in encoder_signature:
                 batch["n_quantizers"] = num_codebooks
-
+            #For miniv1.1
+            batch.pop('padding_mask', None)
+            batch.pop('bandwidth', None)
             with torch.no_grad():
                 labels = audio_decoder.encode(**batch)["audio_codes"]
             output = {}
