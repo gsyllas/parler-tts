@@ -83,8 +83,7 @@ def wer(
         "automatic-speech-recognition",  # Specify task here
         model=asr_model_name_or_path, 
         device=device, 
-        chunk_length_s=25.0,
-        model_kwargs={"language": "greek"}  # Remove task from here
+        chunk_length_s=25.0
     )
 
     return_language = None

@@ -341,19 +341,271 @@ def main():
         attn_implementation={"decoder": model_args.attn_implementation, "text_encoder": "eager"},
     )
     
-    print("Model named modules")
-    for name, _ in model.named_modules():
-        print(name)
+    # print("Model named modules")
+    # for name, _ in model.named_modules():
+    #     print(name)
 
     if training_args.use_lora:
-        target_modules = [
-            "k_proj", "v_proj", "q_proj", "out_proj",
-            "fc1", "fc2", "k", "v", "q", "o", "wi", "wo",
-            "encoder_attn.k_proj", "encoder_attn.v_proj",
-            "encoder_attn.q_proj", "encoder_attn.out_proj"
-        ]
 
-        config = LoraConfig(
+        # print("Lora compatible modules-----------------------------------------------")
+        # print(list(set(get_specific_layer_names(model))))
+
+        target_modules = [
+    "decoder.model.decoder.embed_tokens.0",
+    "decoder.model.decoder.embed_tokens.1",
+    "decoder.model.decoder.embed_tokens.2",
+    "decoder.model.decoder.embed_tokens.3",
+    "decoder.model.decoder.embed_tokens.4",
+    "decoder.model.decoder.embed_tokens.5",
+    "decoder.model.decoder.embed_tokens.6",
+    "decoder.model.decoder.embed_tokens.7",
+    "decoder.model.decoder.embed_tokens.8",
+    "decoder.model.decoder.layers.0.self_attn.k_proj",
+    "decoder.model.decoder.layers.0.self_attn.v_proj",
+    "decoder.model.decoder.layers.0.self_attn.q_proj",
+    "decoder.model.decoder.layers.0.self_attn.out_proj",
+    "decoder.model.decoder.layers.0.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.0.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.0.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.0.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.0.fc1",
+    "decoder.model.decoder.layers.0.fc2",
+    "decoder.model.decoder.layers.1.self_attn.k_proj",
+    "decoder.model.decoder.layers.1.self_attn.v_proj",
+    "decoder.model.decoder.layers.1.self_attn.q_proj",
+    "decoder.model.decoder.layers.1.self_attn.out_proj",
+    "decoder.model.decoder.layers.1.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.1.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.1.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.1.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.1.fc1",
+    "decoder.model.decoder.layers.1.fc2",
+    "decoder.model.decoder.layers.2.self_attn.k_proj",
+    "decoder.model.decoder.layers.2.self_attn.v_proj",
+    "decoder.model.decoder.layers.2.self_attn.q_proj",
+    "decoder.model.decoder.layers.2.self_attn.out_proj",
+    "decoder.model.decoder.layers.2.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.2.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.2.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.2.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.2.fc1",
+    "decoder.model.decoder.layers.2.fc2",
+    "decoder.model.decoder.layers.3.self_attn.k_proj",
+    "decoder.model.decoder.layers.3.self_attn.v_proj",
+    "decoder.model.decoder.layers.3.self_attn.q_proj",
+    "decoder.model.decoder.layers.3.self_attn.out_proj",
+    "decoder.model.decoder.layers.3.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.3.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.3.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.3.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.3.fc1",
+    "decoder.model.decoder.layers.3.fc2",
+    "decoder.model.decoder.layers.4.self_attn.k_proj",
+    "decoder.model.decoder.layers.4.self_attn.v_proj",
+    "decoder.model.decoder.layers.4.self_attn.q_proj",
+    "decoder.model.decoder.layers.4.self_attn.out_proj",
+    "decoder.model.decoder.layers.4.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.4.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.4.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.4.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.4.fc1",
+    "decoder.model.decoder.layers.4.fc2",
+    "decoder.model.decoder.layers.5.self_attn.k_proj",
+    "decoder.model.decoder.layers.5.self_attn.v_proj",
+    "decoder.model.decoder.layers.5.self_attn.q_proj",
+    "decoder.model.decoder.layers.5.self_attn.out_proj",
+    "decoder.model.decoder.layers.5.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.5.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.5.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.5.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.5.fc1",
+    "decoder.model.decoder.layers.5.fc2",
+    "decoder.model.decoder.layers.6.self_attn.k_proj",
+    "decoder.model.decoder.layers.6.self_attn.v_proj",
+    "decoder.model.decoder.layers.6.self_attn.q_proj",
+    "decoder.model.decoder.layers.6.self_attn.out_proj",
+    "decoder.model.decoder.layers.6.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.6.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.6.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.6.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.6.fc1",
+    "decoder.model.decoder.layers.6.fc2",
+    "decoder.model.decoder.layers.7.self_attn.k_proj",
+    "decoder.model.decoder.layers.7.self_attn.v_proj",
+    "decoder.model.decoder.layers.7.self_attn.q_proj",
+    "decoder.model.decoder.layers.7.self_attn.out_proj",
+    "decoder.model.decoder.layers.7.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.7.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.7.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.7.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.7.fc1",
+    "decoder.model.decoder.layers.7.fc2",
+    "decoder.model.decoder.layers.8.self_attn.k_proj",
+    "decoder.model.decoder.layers.8.self_attn.v_proj",
+    "decoder.model.decoder.layers.8.self_attn.q_proj",
+    "decoder.model.decoder.layers.8.self_attn.out_proj",
+    "decoder.model.decoder.layers.8.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.8.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.8.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.8.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.8.fc1",
+    "decoder.model.decoder.layers.8.fc2",
+    "decoder.model.decoder.layers.9.self_attn.k_proj",
+    "decoder.model.decoder.layers.9.self_attn.v_proj",
+    "decoder.model.decoder.layers.9.self_attn.q_proj",
+    "decoder.model.decoder.layers.9.self_attn.out_proj",
+    "decoder.model.decoder.layers.9.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.9.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.9.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.9.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.9.fc1",
+    "decoder.model.decoder.layers.9.fc2",
+    "decoder.model.decoder.layers.10.self_attn.k_proj",
+    "decoder.model.decoder.layers.10.self_attn.v_proj",
+    "decoder.model.decoder.layers.10.self_attn.q_proj",
+    "decoder.model.decoder.layers.10.self_attn.out_proj",
+    "decoder.model.decoder.layers.10.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.10.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.10.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.10.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.10.fc1",
+    "decoder.model.decoder.layers.10.fc2",
+    "decoder.model.decoder.layers.11.self_attn.k_proj",
+    "decoder.model.decoder.layers.11.self_attn.v_proj",
+    "decoder.model.decoder.layers.11.self_attn.q_proj",
+    "decoder.model.decoder.layers.11.self_attn.out_proj",
+    "decoder.model.decoder.layers.11.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.11.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.11.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.11.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.11.fc1",
+    "decoder.model.decoder.layers.11.fc2",
+    "decoder.model.decoder.layers.12.self_attn.k_proj",
+    "decoder.model.decoder.layers.12.self_attn.v_proj",
+    "decoder.model.decoder.layers.12.self_attn.q_proj",
+    "decoder.model.decoder.layers.12.self_attn.out_proj",
+    "decoder.model.decoder.layers.12.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.12.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.12.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.12.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.12.fc1",
+    "decoder.model.decoder.layers.12.fc2",
+    "decoder.model.decoder.layers.13.self_attn.k_proj",
+    "decoder.model.decoder.layers.13.self_attn.v_proj",
+    "decoder.model.decoder.layers.13.self_attn.q_proj",
+    "decoder.model.decoder.layers.13.self_attn.out_proj",
+    "decoder.model.decoder.layers.13.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.13.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.13.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.13.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.13.fc1",
+    "decoder.model.decoder.layers.13.fc2",
+    "decoder.model.decoder.layers.14.self_attn.k_proj",
+    "decoder.model.decoder.layers.14.self_attn.v_proj",
+    "decoder.model.decoder.layers.14.self_attn.q_proj",
+    "decoder.model.decoder.layers.14.self_attn.out_proj",
+    "decoder.model.decoder.layers.14.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.14.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.14.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.14.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.14.fc1",
+    "decoder.model.decoder.layers.14.fc2",
+    "decoder.model.decoder.layers.15.self_attn.k_proj",
+    "decoder.model.decoder.layers.15.self_attn.v_proj",
+    "decoder.model.decoder.layers.15.self_attn.q_proj",
+    "decoder.model.decoder.layers.15.self_attn.out_proj",
+    "decoder.model.decoder.layers.15.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.15.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.15.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.15.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.15.fc1",
+    "decoder.model.decoder.layers.15.fc2",
+    "decoder.model.decoder.layers.16.self_attn.k_proj",
+    "decoder.model.decoder.layers.16.self_attn.v_proj",
+    "decoder.model.decoder.layers.16.self_attn.q_proj",
+    "decoder.model.decoder.layers.16.self_attn.out_proj",
+    "decoder.model.decoder.layers.16.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.16.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.16.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.16.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.16.fc1",
+    "decoder.model.decoder.layers.16.fc2",
+    "decoder.model.decoder.layers.17.self_attn.k_proj",
+    "decoder.model.decoder.layers.17.self_attn.v_proj",
+    "decoder.model.decoder.layers.17.self_attn.q_proj",
+    "decoder.model.decoder.layers.17.self_attn.out_proj",
+    "decoder.model.decoder.layers.17.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.17.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.17.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.17.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.17.fc1",
+    "decoder.model.decoder.layers.17.fc2",
+    "decoder.model.decoder.layers.18.self_attn.k_proj",
+    "decoder.model.decoder.layers.18.self_attn.v_proj",
+    "decoder.model.decoder.layers.18.self_attn.q_proj",
+    "decoder.model.decoder.layers.18.self_attn.out_proj",
+    "decoder.model.decoder.layers.18.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.18.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.18.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.18.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.18.fc1",
+    "decoder.model.decoder.layers.18.fc2",
+    "decoder.model.decoder.layers.19.self_attn.k_proj",
+    "decoder.model.decoder.layers.19.self_attn.v_proj",
+    "decoder.model.decoder.layers.19.self_attn.q_proj",
+    "decoder.model.decoder.layers.19.self_attn.out_proj",
+    "decoder.model.decoder.layers.19.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.19.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.19.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.19.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.19.fc1",
+    "decoder.model.decoder.layers.19.fc2",
+    "decoder.model.decoder.layers.20.self_attn.k_proj",
+    "decoder.model.decoder.layers.20.self_attn.v_proj",
+    "decoder.model.decoder.layers.20.self_attn.q_proj",
+    "decoder.model.decoder.layers.20.self_attn.out_proj",
+    "decoder.model.decoder.layers.20.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.20.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.20.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.20.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.20.fc1",
+    "decoder.model.decoder.layers.20.fc2",
+    "decoder.model.decoder.layers.21.self_attn.k_proj",
+    "decoder.model.decoder.layers.21.self_attn.v_proj",
+    "decoder.model.decoder.layers.21.self_attn.q_proj",
+    "decoder.model.decoder.layers.21.self_attn.out_proj",
+    "decoder.model.decoder.layers.21.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.21.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.21.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.21.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.21.fc1",
+    "decoder.model.decoder.layers.21.fc2",
+    "decoder.model.decoder.layers.22.self_attn.k_proj",
+    "decoder.model.decoder.layers.22.self_attn.v_proj",
+    "decoder.model.decoder.layers.22.self_attn.q_proj",
+    "decoder.model.decoder.layers.22.self_attn.out_proj",
+    "decoder.model.decoder.layers.22.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.22.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.22.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.22.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.22.fc1",
+    "decoder.model.decoder.layers.22.fc2",
+    "decoder.model.decoder.layers.23.self_attn.k_proj",
+    "decoder.model.decoder.layers.23.self_attn.v_proj",
+    "decoder.model.decoder.layers.23.self_attn.q_proj",
+    "decoder.model.decoder.layers.23.self_attn.out_proj",
+    "decoder.model.decoder.layers.23.encoder_attn.k_proj",
+    "decoder.model.decoder.layers.23.encoder_attn.v_proj",
+    "decoder.model.decoder.layers.23.encoder_attn.q_proj",
+    "decoder.model.decoder.layers.23.encoder_attn.out_proj",
+    "decoder.model.decoder.layers.23.fc1",
+    "decoder.model.decoder.layers.23.fc2",
+    "decoder.lm_heads",
+    "embed_prompts"
+]
+        model.freeze_encoders(model_args.freeze_text_encoder)
+
+        loraconfig = LoraConfig(
             r=training_args.lora_r,
             lora_alpha=training_args.lora_alpha,
             target_modules=target_modules,
@@ -361,8 +613,11 @@ def main():
             bias="none",
         )
         model.enable_input_require_grads()
-        model = get_peft_model(model, config)
+        model = get_peft_model(model, loraconfig)
         model.print_trainable_parameters()
+        print("-----------------------------------------Decoder-------------------------------------------")
+        print_decoder_trainable_params(model)
+
     
     # enable gradient checkpointing if necessary
     if training_args.gradient_checkpointing:
@@ -1280,6 +1535,36 @@ def print_trainable_params(model):
     trainable_percent = 100 * trainable / total_params
     print(f"Trainable: {trainable:,} | Non-trainable: {non_trainable:,} | Percent Trainable params: {trainable_percent:.2f}%")
 
+def print_decoder_trainable_params(model):
+    decoder = model.decoder
+    trainable_decoder_params = sum(p.numel() for p in decoder.parameters() if p.requires_grad)
+    all_decoder_params = sum(p.numel() for p in decoder.parameters())
+    trainable_decoder_percent = 100 * trainable_decoder_params / all_decoder_params
+
+    print(f"Decoder Trainable Params: {trainable_decoder_params:,} || All Decoder Params: {all_decoder_params:,} || Trainable%: {trainable_decoder_percent:.2f}%")
+
+
+import torch
+from transformers import Conv1D
+
+def get_specific_layer_names(model):
+    # Create a list to store the layer names
+    layer_names = []
+    
+    # Recursively visit all modules and submodules
+    for name, module in model.named_modules():
+        # Check if the module is an instance of the specified layers
+        if isinstance(module, (torch.nn.Linear, torch.nn.Embedding, torch.nn.Conv2d, Conv1D)):
+            # model name parsing 
+            # print("our name is ",name)
+            # print("our module is ",module)
+            layer_names.append('.'.join(name.split('.')[4:]).split('.')[0])
+    
+    return layer_names
+
+
+
+# Call this function after applying LoRA:
 
 if __name__ == "__main__":
     main()
