@@ -96,18 +96,13 @@ def wer(
     else:
         tokenizer = WhisperTokenizer.from_pretrained("openai/whisper-large-v3")
 
-    english_normalizer = tokenizer.normalize
-    basic_normalizer = tokenizer.basic_normalize
+    # Removed English-specific normalization, using basic_normalize for all cases
+    normalizer = tokenizer.basic_normalize
 
     normalized_predictions = []
     normalized_references = []
 
     for pred, ref in zip(transcriptions, prompts):
-        normalizer = (
-            english_normalizer
-            if isinstance(pred.get("chunks", None), list) and pred["chunks"][0].get("language", None) == "english"
-            else basic_normalizer
-        )
         norm_ref = normalizer(ref)
         if len(norm_ref) > 0:
             norm_pred = normalizer(pred["text"])
