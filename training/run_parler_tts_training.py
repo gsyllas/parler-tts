@@ -31,7 +31,13 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
+      
+import torch.nn.functional as F
+import random  # For random segment selection
+import torchaudio #NEW
+from transformers import AutoModel #NEW
 
+    
 import datasets
 from datasets import DatasetDict, Dataset, IterableDataset, concatenate_datasets
 
@@ -69,7 +75,71 @@ from training.eval import clap_similarity, wer, si_sdr
 
 logger = logging.getLogger(__name__)
 
+def create_attention_mask(max_length, original_length):
+    """Creates an attention mask (1 for valid, 0 for padding)."""
+    mask = torch.zeros(max_length, dtype=torch.int64)
+    mask[:original_length] = 1
+    return mask
 
+class TextAudioDataset(torch.utils.data.Dataset):
+    def __init__(self, audio_files, text_files, style_files, speaker_ids, max_length, segment_length_factor_range=(0.25, 0.5), downsample_factor=320):
+        self.audio_files = audio_files
+        self.text_files = text_files
+        self.style_files = style_files  # Added for consistency.
+        self.speaker_ids = speaker_ids
+        self.max_length = max_length  # Max length *in samples* (for padding)
+        self.segment_length_factor_range = segment_length_factor_range
+        self.downsample_factor = downsample_factor  # Downsampling factor of your AUDIO ENCODER
+
+        # Calculate average audio length for segment length calculation
+        total_length = 0
+        for audio_file in self.audio_files:
+            waveform, _ = torchaudio.load(audio_file)
+            total_length += waveform.shape[-1]
+        self.average_audio_length = total_length / len(self.audio_files)
+
+    def __len__(self):
+        return len(self.audio_files)
+
+    def __getitem__(self, idx):
+        # Load audio waveform and metadata
+        audio_waveform, sample_rate = torchaudio.load(self.audio_files[idx])
+        original_audio_length = audio_waveform.shape[-1] # Length in samples
+        text = load_text(self.text_files[idx])  # Implement load_text
+        style_text = load_style_text(self.style_files[idx])  # Implement load_style_text
+        speaker_id = self.speaker_ids[idx]
+
+        # --- Audio Prompt Segment Selection ---
+        # 1. Determine segment length (randomly within the specified range)
+        segment_length_factor = random.uniform(*self.segment_length_factor_range)
+        segment_length = int(segment_length_factor * self.average_audio_length)
+        # Ensure segment length doesn't exceed the actual audio length
+        segment_length = min(segment_length, original_audio_length)
+
+        # 2. Choose a random starting point
+        start_point = random.randint(0, original_audio_length - segment_length)
+
+        # 3. Extract the segment
+        audio_prompt = audio_waveform[:, start_point:start_point + segment_length]
+
+
+        # --- Audio Prompt Padding and Masking ---
+        prompt_original_length = audio_prompt.shape[-1] // self.downsample_factor  # Length in *frames*
+        prompt_max_length_model = self.max_length // self.downsample_factor # Length in frames
+        audio_prompt_attention_mask = create_attention_mask(prompt_max_length_model, prompt_original_length)
+        prompt_padding_needed = max(0, self.max_length - audio_prompt.shape[-1])  # Padding in *samples*
+        padded_audio_prompt = torch.nn.functional.pad(audio_prompt, (0, prompt_padding_needed))
+
+        # --- Target Audio Padding and Masking ---
+        target_original_length = original_audio_length // self.downsample_factor #Length in frames
+        target_max_length_model = self.max_length // self.downsample_factor  # Length in frames, for consistency
+        target_audio_attention_mask = create_attention_mask(target_max_length_model, target_original_length) # Create the mask
+        target_padding_needed = max(0, self.max_length - original_audio_length)
+        padded_target_audio = torch.nn.functional.pad(audio_waveform, (0, target_padding_needed))
+
+
+        return text, style_text, padded_audio_prompt.squeeze(0), speaker_id, audio_prompt_attention_mask, padded_target_audio.squeeze(0), target_audio_attention_mask
+    
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.

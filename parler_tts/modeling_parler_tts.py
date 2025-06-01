@@ -24,7 +24,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
-from transformers import AutoConfig, AutoModel, AutoModelForTextEncoding
+from transformers import AutoConfig, AutoModel, AutoModelForTextEncoding, HubertModel, HubertConfig, AutoFeatureExtractor
 from transformers.activations import ACT2FN
 from transformers.cache_utils import (
     Cache,
@@ -96,8 +96,78 @@ MUSICGEN_PRETRAINED_MODEL_ARCHIVE_LIST = [
 
 NEED_SETUP_CACHE_CLASSES_MAPPING = {"static": StaticCache, "sliding_window": SlidingWindowCache}
 
+class AudioPromptEncoder(nn.Module):
+    def __init__(self, hubert_model_name="m3hrdadfi/hubert-large-greek-speech-emotion-recognition"):
+        super().__init__()
+        self.feature_extractor = AutoFeatureExtractor.from_pretrained(hubert_model_name)
+        self.config = HubertConfig.from_pretrained(hubert_model_name)
+        self.hubert = HubertModel.from_pretrained(hubert_model_name, config=self.config)
+        for param in self.hubert.parameters():
+            param.requires_grad = False  # Freeze initially
+        self.projection = nn.Linear(self.config.hidden_size, 768) #Project to the correct size
+
+    def forward(self, audio_input, attention_mask=None):
+        inputs = self.feature_extractor(audio_input, return_tensors="pt", sampling_rate=16000, padding=True) #Added feature extractor
+        outputs = self.hubert(inputs.input_values.squeeze(0), attention_mask=inputs.attention_mask) #inputs.attention_mask contains the attention mask
+        audio_features = outputs.last_hidden_state
+        projected_features = self.projection(audio_features)
+        return projected_features
+
+class CrossAttentionFusion(nn.Module):
+    def __init__(self, audio_token_dim, audio_feature_dim, num_heads=8):
+        super().__init__()
+        self.audio_token_dim = audio_token_dim
+        self.audio_feature_dim = audio_feature_dim
+        self.num_heads = num_heads
+
+        # Key, Query, Value projections for audio tokens
+        self.query_projection = nn.Linear(audio_token_dim, audio_token_dim)
+        self.key_projection_audio = nn.Linear(audio_token_dim, audio_token_dim)
+        self.value_projection_audio = nn.Linear(audio_token_dim, audio_token_dim)
+
+        # Key, Value projections for audio features
+        self.key_projection_prompt = nn.Linear(audio_feature_dim, audio_token_dim)  # Match dimensions
+        self.value_projection_prompt = nn.Linear(audio_feature_dim, audio_token_dim) # Match dimensions
+
+        # Output projection
+        self.output_projection = nn.Linear(audio_token_dim, audio_token_dim)
+
+    def forward(self, audio_tokens, audio_features, audio_features_attention_mask=None):
+        # audio_tokens: [batch_size, num_audio_tokens, audio_token_dim]
+        # audio_features: [batch_size, audio_feature_seq_len, audio_feature_dim]
+
+        # Project to queries, keys, and values
+        query = self.query_projection(audio_tokens)
+        key_audio = self.key_projection_audio(audio_tokens)
+        value_audio = self.value_projection_audio(audio_tokens)
+
+        key_prompt = self.key_projection_prompt(audio_features)
+        value_prompt = self.value_projection_prompt(audio_features)
+
+        # Calculate attention scores
+        attention_scores = torch.matmul(query, key_prompt.transpose(-2, -1)) / (self.audio_token_dim ** 0.5)
+        # attention_scores: [batch_size, num_audio_tokens, audio_feature_seq_len]
+
+        # Apply attention mask if provided.
+        if audio_features_attention_mask is not None:
+            # Expand dims of attention mask for broadcasting.
+             extended_attention_mask = audio_features_attention_mask.unsqueeze(1) # [batch_size, 1, audio_feature_seq_len]
+             attention_scores = attention_scores.masked_fill(extended_attention_mask == 0, -1e9)
+
+        attention_weights = F.softmax(attention_scores, dim=-1)
+
+        # Weighted sum of prompt values
+        attended_prompt = torch.matmul(attention_weights, value_prompt)
+        # attended_prompt: [batch_size, num_audio_tokens, audio_token_dim]
 
 
+        # Combine with the original audio tokens (residual connection)
+        fused_tokens = audio_tokens + attended_prompt
+
+        #Output
+        fused_tokens = self.output_projection(fused_tokens)
+
+        return fused_tokens
 @dataclass
 class ParlerTTSSeq2SeqLMOutput(ModelOutput):
     """
@@ -2358,6 +2428,8 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
         self.text_encoder = text_encoder
         self.audio_encoder = audio_encoder
         self.decoder = decoder
+        self.audio_prompt_encoder = AudioPromptEncoder()  # Create an instance
+        self.fusion_module = CrossAttentionFusion(audio_token_dim=1024, audio_feature_dim=768)  # Correct dimensions
 
         if self.text_encoder.config.to_dict() != self.config.text_encoder.to_dict():
             logger.warning(
@@ -2707,6 +2779,8 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
         prompt_input_ids: Optional[torch.FloatTensor] = None,
         prompt_attention_mask: Optional[torch.LongTensor] = None,
         prompt_hidden_states: Optional[torch.FloatTensor] = None,
+        audio_prompt: Optional[torch.FloatTensor] = None,  # ADDED
+        audio_prompt_attention_mask: Optional[torch.LongTensor] = None,  # ADDED
         decoder_position_ids: Optional[torch.LongTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
@@ -2862,10 +2936,36 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
             loss_reduction=loss_reduction,
             **kwargs_decoder,
         )
+        # 6. Audio Prompt Encoding (NEW)
+        if audio_prompt is not None:  # Only encode if provided
+            audio_prompt_features = self.audio_prompt_encoder(audio_prompt, attention_mask=audio_prompt_attention_mask)
+        else:
+            audio_prompt_features = None
 
+        # 7. Fusion (Cross-Attention) (NEW)
+        if audio_prompt_features is not None:
+            fused_audio_tokens = self.fusion_module(decoder_outputs.last_hidden_state, audio_prompt_features, audio_prompt_attention_mask)
+        else:  # If no audio prompt, just use decoder output
+            fused_audio_tokens = decoder_outputs.last_hidden_state
         if not return_dict:
+            if audio_prompt_features is not None:
+                return (fused_audio_tokens,) + decoder_outputs[1:] + (encoder_hidden_states,)
             return decoder_outputs + (encoder_hidden_states,)
 
+        if audio_prompt_features is not None: #NEW
+            return ParlerTTSSeq2SeqLMOutput(
+                loss=decoder_outputs.loss,
+                logits=fused_audio_tokens,  # Use fused tokens as logits
+                past_key_values=decoder_outputs.past_key_values,
+                decoder_hidden_states=decoder_outputs.hidden_states,
+                decoder_attentions=decoder_outputs.attentions,
+                cross_attentions=decoder_outputs.cross_attentions,
+                encoder_last_hidden_state=encoder_outputs.last_hidden_state,
+                encoder_hidden_states=encoder_outputs.hidden_states,
+                encoder_attentions=encoder_outputs.attentions,
+                per_codebook_losses=decoder_outputs.per_codebook_losses,
+            )
+        
         return ParlerTTSSeq2SeqLMOutput(
             loss=decoder_outputs.loss,
             logits=decoder_outputs.logits,
@@ -2889,6 +2989,8 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
         decoder_head_mask=None,
         prompt_hidden_states=None,
         prompt_attention_mask=None,
+        audio_prompt = None, #NEW
+        audio_prompt_attention_mask=None, #NEW
         cross_attn_head_mask=None,
         use_cache=None,
         encoder_outputs=None,
@@ -2983,6 +3085,8 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
             "use_cache": use_cache,
             "cache_position": cache_position,
             "inputs_embeds": inputs_embeds,
+            "audio_prompt": audio_prompt, #NEW
+            "audio_prompt_attention_mask" : audio_prompt_attention_mask, #NEW
         }
 
     def _prepare_decoder_input_ids_for_generation(
