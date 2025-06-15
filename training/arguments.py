@@ -373,3 +373,26 @@ class ParlerTTSTrainingArguments(Seq2SeqTrainingArguments):
         default=None,
         metadata={"help": "Weights applied to each codebook."},
     )
+
+
+    # --- NEW ARGUMENTS FOR MULTIMODAL TRAINING ---
+
+    feature_matching_weight: float = field(
+        default=0.1,
+        metadata={"help": "The weight to apply to the feature matching loss between the audio prompt and the generated audio's hidden states."},
+    )
+    
+    audio_prompt_segment_min_factor: float = field(
+        default=0.25,
+        metadata={"help": "The minimum length of a random audio prompt segment, as a factor of the target audio's length."},
+    )
+    
+    audio_prompt_segment_max_factor: float = field(
+        default=0.25,
+        metadata={"help": "The maximum length of a random audio prompt segment, as a factor of the target audio's length."},
+    )
+
+    audio_prompt_encoder_downsample_factor: int = field(
+        default=320,
+        metadata={"help": "The downsampling factor of the audio prompt encoder (e.g., HuBERT). This is crucial for creating correct attention masks."},
+    )

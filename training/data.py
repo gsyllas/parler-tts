@@ -75,9 +75,7 @@ class DataCollatorParlerTTSWithPadding:
     audio_max_length: Optional[int] = None
 
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-        # split inputs and labels since they have to be of different lengths and need
-        # different padding methods
-
+        # --- Existing Label and Text Handling (KEEP AS IS) ---
         labels = [torch.tensor(feature["labels"]).transpose(0, 1) for feature in features]
         # (bsz, seq_len, num_codebooks)
         labels = torch.nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=-100)
@@ -87,7 +85,6 @@ class DataCollatorParlerTTSWithPadding:
             )
 
         input_ids = [{"input_ids": feature["input_ids"]} for feature in features]
-
         input_ids = self.description_tokenizer.pad(
             input_ids,
             return_tensors="pt",
@@ -96,7 +93,7 @@ class DataCollatorParlerTTSWithPadding:
             max_length=self.description_max_length,
         )
 
-        batch = {"labels": labels, **input_ids}
+        batch = {"labels": labels, **input_ids} #KEEP AS IS
 
         prompt_input_ids = [{"input_ids": feature["prompt_input_ids"]} for feature in features]
         prompt_input_ids = self.prompt_tokenizer.pad(
@@ -111,7 +108,7 @@ class DataCollatorParlerTTSWithPadding:
         if "attention_mask" in prompt_input_ids:
             batch["prompt_attention_mask"] = prompt_input_ids["attention_mask"]
 
-                # --- NEW: Audio Prompt and Target Handling ---
+        # --- NEW: Audio Prompt and Target Handling ---
         # Extract the audio-related data from the features list
         audio_prompts = [feature["audio_prompt"] for feature in features]
         speaker_ids = [feature["speaker_id"] for feature in features] # Added speaker_id
@@ -133,9 +130,8 @@ class DataCollatorParlerTTSWithPadding:
         batch["target_audio"] = target_audios
         batch["target_audio_attention_mask"] = target_audio_attention_masks
         # --- End of NEW Audio Handling ---
-        
-        return batch
 
+        return batch
 
 def convert_dataset_str_to_list(
     dataset_names,
