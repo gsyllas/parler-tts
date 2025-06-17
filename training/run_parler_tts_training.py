@@ -28,6 +28,7 @@ from datetime import timedelta
 import inspect
 from tqdm import tqdm
 from pathlib import Path
+from speechbrain.pretrained import EncoderClassifier
 
 import torch
 from torch.utils.data import DataLoader
@@ -140,67 +141,17 @@ def create_audio_prompts_and_masks(batch, data_args, training_args, sampling_rat
     batch["audio_prompt_attention_mask"] = prompt_masks_batch
     batch["target_audio_attention_mask"] = target_masks_batch
     
+
+    # make a uniformly-padded copy of the *full* target wave for ECAPA & collator 
+    padded_target = [] 
+    for wav in target_audios_list:
+        cut = wav[:max_len_samples] # truncate if longer
+        pad = max(0, max_len_samples - len(cut))
+        padded_target.append(torch.nn.functional.pad(torch.tensor(cut), (0, pad)))
+    batch["target_audio"] = padded_target # <-- NEW
+    batch["speaker_id"] = [0] * len(padded_target) # placeholder; swap if you have real IDs
+
     return batch
-
-# class TextAudioDataset(torch.utils.data.Dataset):
-#     def __init__(self, audio_files, text_files, style_files, speaker_ids, max_length, segment_length_factor_range=(0.25, 0.5), downsample_factor=320):
-#         self.audio_files = audio_files
-#         self.text_files = text_files
-#         self.style_files = style_files  # Added for consistency.
-#         self.speaker_ids = speaker_ids
-#         self.max_length = max_length  # Max length *in samples* (for padding)
-#         self.segment_length_factor_range = segment_length_factor_range
-#         self.downsample_factor = downsample_factor  # Downsampling factor of your AUDIO ENCODER
-
-#         # Calculate average audio length for segment length calculation
-#         total_length = 0
-#         for audio_file in self.audio_files:
-#             waveform, _ = torchaudio.load(audio_file)
-#             total_length += waveform.shape[-1]
-#         self.average_audio_length = total_length / len(self.audio_files)
-
-#     def __len__(self):
-#         return len(self.audio_files)
-
-#     def __getitem__(self, idx):
-#         # Load audio waveform and metadata
-#         audio_waveform, sample_rate = torchaudio.load(self.audio_files[idx])
-#         original_audio_length = audio_waveform.shape[-1] # Length in samples
-#         text = load_text(self.text_files[idx])  # Implement load_text
-#         style_text = load_style_text(self.style_files[idx])  # Implement load_style_text
-#         speaker_id = self.speaker_ids[idx]
-
-#         # --- Audio Prompt Segment Selection ---
-#         # 1. Determine segment length (randomly within the specified range)
-#         segment_length_factor = random.uniform(*self.segment_length_factor_range)
-#         segment_length = int(segment_length_factor * self.average_audio_length)
-#         # Ensure segment length doesn't exceed the actual audio length
-#         segment_length = min(segment_length, original_audio_length)
-
-#         # 2. Choose a random starting point
-#         start_point = random.randint(0, original_audio_length - segment_length)
-
-#         # 3. Extract the segment
-#         audio_prompt = audio_waveform[:, start_point:start_point + segment_length]
-
-
-#         # --- Audio Prompt Padding and Masking ---
-#         prompt_original_length = audio_prompt.shape[-1] // self.downsample_factor  # Length in *frames*
-#         prompt_max_length_model = self.max_length // self.downsample_factor # Length in frames
-#         audio_prompt_attention_mask = create_attention_mask(prompt_max_length_model, prompt_original_length)
-#         prompt_padding_needed = max(0, self.max_length - audio_prompt.shape[-1])  # Padding in *samples*
-#         padded_audio_prompt = torch.nn.functional.pad(audio_prompt, (0, prompt_padding_needed))
-
-#         # --- Target Audio Padding and Masking ---
-#         target_original_length = original_audio_length // self.downsample_factor #Length in frames
-#         target_max_length_model = self.max_length // self.downsample_factor  # Length in frames, for consistency
-#         target_audio_attention_mask = create_attention_mask(target_max_length_model, target_original_length) # Create the mask
-#         target_padding_needed = max(0, self.max_length - original_audio_length)
-#         padded_target_audio = torch.nn.functional.pad(audio_waveform, (0, target_padding_needed))
-
-
-#         return text, style_text, padded_audio_prompt.squeeze(0), speaker_id, audio_prompt_attention_mask, padded_target_audio.squeeze(0), target_audio_attention_mask
-    
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -241,7 +192,12 @@ def main():
 
     ####### A. Preparation
     kwargs_handlers = [InitProcessGroupKwargs(timeout=timedelta(minutes=120)), DistributedDataParallelKwargs(find_unused_parameters=False)]
-
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    spk_enc = EncoderClassifier.from_hparams("speechbrain/spkrec-ecapa-voxceleb").to(device).eval()
+    for p in spk_enc.parameters():
+        p.requires_grad_(False)
+    
     accelerator = Accelerator(
         gradient_accumulation_steps=training_args.gradient_accumulation_steps,
         mixed_precision=mixed_precision,
@@ -527,63 +483,6 @@ def main():
             return batch
         # Location: Inside main(), right after the pass_through_processors function is defined.
         # It should be BEFORE the `vectorized_datasets = raw_datasets.map(...)` line.
-
-        # --- NEW: Function to create audio prompts and masks ---
-        # This function will be mapped over the dataset.
-        def create_audio_prompts_and_masks(batch, data_args, sampling_rate, max_target_length):
-            # Assumes 'target_audio' column exists and contains loaded audio arrays.
-            # This is handled by `load_multiple_datasets`.
-            
-            target_audios = [audio["array"] for audio in batch[data_args.target_audio_column_name]]
-            original_audio_lengths = [len(audio) for audio in target_audios]
-
-            audio_prompts = []
-            
-            # This is a simplification. In a real scenario, you'd calculate an average length.
-            # For this example, we'll use a fixed fraction of the target length.
-            segment_length_factor_range=(0.25, 0.5)
-
-            for audio, length in zip(target_audios, original_audio_lengths):
-                segment_length = int(random.uniform(*segment_length_factor_range) * length)
-                segment_length = min(segment_length, length) # Ensure not longer than original
-                if length > segment_length:
-                    start_point = random.randint(0, length - segment_length)
-                    audio_prompts.append(audio[start_point : start_point + segment_length])
-                else:
-                    audio_prompts.append(audio) # Use the whole audio if it's too short
-
-            # Padding and Masking
-            # This needs the downsample factor of your audio prompt encoder (e.g., HuBERT).
-            # We'll assume a value here. YOU MUST VERIFY THIS.
-            downsample_factor = 320 # EXAMPLE: For HuBERT base. CHECK YOURS.
-            
-            max_len_samples = max_target_length
-
-            padded_prompts = []
-            prompt_masks = []
-            for prompt in audio_prompts:
-                # Pad the audio prompt waveform
-                padding_needed = max(0, max_len_samples - len(prompt))
-                padded_prompts.append(torch.nn.functional.pad(torch.tensor(prompt), (0, padding_needed)).numpy())
-                
-                # Create the attention mask
-                original_len_frames = len(prompt) // downsample_factor
-                max_len_frames = max_len_samples // downsample_factor
-                prompt_masks.append(create_attention_mask(max_len_frames, original_len_frames))
-            
-            batch["audio_prompt"] = padded_prompts
-            batch["audio_prompt_attention_mask"] = prompt_masks
-            
-            # Create mask for the TARGET audio as well (for feature matching loss)
-            target_masks = []
-            for length in original_audio_lengths:
-                original_len_frames = length // downsample_factor
-                max_len_frames = max_len_samples // downsample_factor
-                target_masks.append(create_attention_mask(max_len_frames, original_len_frames))
-            
-            batch["target_audio_attention_mask"] = target_masks
-            
-            return batch
 
         # Now, find this line:
         # vectorized_datasets = raw_datasets.map(...)
@@ -1119,13 +1018,20 @@ def main():
             generated_style_vector = torch.mean(fused_hidden_states, dim=1)
             prompt_style_vector = torch.mean(prompt_features, dim=1)
 
-            feature_matching_loss = F.mse_loss(generated_style_vector, prompt_style_vector)
+            # ECAPA stays frozen
+            ref_emb = spk_enc.encode_batch(batch["audio_prompt"]).squeeze(1) # (B,192)
+            gen_emb = spk_enc.encode_batch(batch["target_audio"].detach()).squeeze(1)
+            spk_loss = 1 - torch.nn.functional.cosine_similarity(ref_emb, gen_emb, dim=-1).mean()
+            
+            total_loss = ce_loss + training_args.feature_matching_weight * spk_loss
+            
+            
 
             # --- Total Loss ---
-            total_loss = ce_loss + (training_args.feature_matching_weight * feature_matching_loss)
+            total_loss = ce_loss + (training_args.feature_matching_weight * spk_loss)
 
         # Prepare metrics for logging
-        metrics = {"loss": ce_loss.detach(), "feature_matching_loss": feature_matching_loss.detach(), "total_loss": total_loss.detach()}
+        metrics = {"ce_loss": ce_loss.detach(), "spk_loss": spk_loss.detach(), "total_loss": total_loss.detach()}
         if outputs.per_codebook_losses is not None:
              metrics.update({f"codebook_{i}_loss": ((l.detach() * gradient_accumulation_steps * accelerator.num_processes) / num_items_in_batch) for (i,l) in enumerate(outputs.per_codebook_losses)})
 
@@ -1275,7 +1181,7 @@ def main():
             if cur_step % training_args.logging_steps == 0:
                 steps_trained_progress_bar.write(
                     f"Step... ({cur_step} / {total_train_steps} | Total Loss:"
-                    f" {train_metric['total_loss']:.4f}, CE Loss: {train_metric['loss']:.4f}, Feat Match Loss: {train_metric['feature_matching_loss']:.4f} | Learning Rate:"
+                    f" {train_metric['total_loss']:.4f}, CE Loss: {train_metric['loss']:.4f}, Feat Match Loss: {train_metric['spk_loss']:.4f} | Learning Rate:"
                     f" {lr_scheduler.get_last_lr()[0]})"
                 )
                 # The rest of the logging block is fine.

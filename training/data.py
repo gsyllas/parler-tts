@@ -108,28 +108,33 @@ class DataCollatorParlerTTSWithPadding:
         if "attention_mask" in prompt_input_ids:
             batch["prompt_attention_mask"] = prompt_input_ids["attention_mask"]
 
-        # --- NEW: Audio Prompt and Target Handling ---
-        # Extract the audio-related data from the features list
-        audio_prompts = [feature["audio_prompt"] for feature in features]
-        speaker_ids = [feature["speaker_id"] for feature in features] # Added speaker_id
-        audio_prompt_attention_masks = [feature["audio_prompt_attention_mask"] for feature in features]
-        target_audios = [feature["target_audio"] for feature in features]
-        target_audio_attention_masks = [feature["target_audio_attention_mask"] for feature in features]
+        # --- NEW: Audio Prompt + Target Handling (padded) ---
+        max_prompt_len  = max(v.size(0) for v in [torch.tensor(f["audio_prompt"]) for f in features])
+        max_target_len  = max(v.size(0) for v in [torch.tensor(f["target_audio"]) for f in features])
 
-        # Stack them into tensors
-        audio_prompts = torch.stack(audio_prompts)
-        speaker_ids = torch.tensor(speaker_ids, dtype=torch.long) # Added speaker_id
-        audio_prompt_attention_masks = torch.stack(audio_prompt_attention_masks)
-        target_audios = torch.stack(target_audios)
-        target_audio_attention_masks = torch.stack(target_audio_attention_masks)
+        def pad1d(t, L):  # helper
+            return torch.nn.functional.pad(torch.tensor(t, dtype=torch.float32), (0, L - len(t)))
 
-        # Add them to the batch dictionary
-        batch["audio_prompt"] = audio_prompts
-        batch["speaker_id"] = speaker_ids # Added speaker_id
-        batch["audio_prompt_attention_mask"] = audio_prompt_attention_masks
-        batch["target_audio"] = target_audios
-        batch["target_audio_attention_mask"] = target_audio_attention_masks
-        # --- End of NEW Audio Handling ---
+        audio_prompts  = torch.stack([pad1d(f["audio_prompt"],  max_prompt_len) for f in features])
+        target_audios  = torch.stack([pad1d(f["target_audio"],  max_target_len) for f in features])
+
+        audio_prompt_attention_masks = torch.stack(
+            [pad1d(f["audio_prompt_attention_mask"],  max_prompt_len // training_args.audio_prompt_encoder_downsample_factor)
+            for f in features]
+        )
+        target_audio_attention_masks = torch.stack(
+            [pad1d(f["target_audio_attention_mask"],  max_target_len // training_args.audio_prompt_encoder_downsample_factor)
+            for f in features]
+        )
+        speaker_ids = torch.tensor([f.get("speaker_id", 0) for f in features], dtype=torch.long)
+
+        batch.update({
+            "audio_prompt":                audio_prompts,
+            "audio_prompt_attention_mask": audio_prompt_attention_masks,
+            "target_audio":                target_audios,
+            "target_audio_attention_mask": target_audio_attention_masks,
+            "speaker_id":                  speaker_ids,
+        })
 
         return batch
 
