@@ -28,7 +28,6 @@ from datetime import timedelta
 import inspect
 from tqdm import tqdm
 from pathlib import Path
-from speechbrain.pretrained import EncoderClassifier
 
 import torch
 from torch.utils.data import DataLoader
@@ -73,6 +72,7 @@ from training.utils import (
 from training.arguments import ModelArguments, DataTrainingArguments, ParlerTTSTrainingArguments
 from training.data import load_multiple_datasets, DataCollatorParlerTTSWithPadding, DataCollatorEncodecWithPadding
 from training.eval import clap_similarity, wer, si_sdr
+from speechbrain.pretrained import EncoderClassifier
 
 logger = logging.getLogger(__name__)
 
