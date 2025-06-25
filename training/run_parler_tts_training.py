@@ -350,6 +350,18 @@ def main():
                 # streaming=data_args.streaming, TODO(SG): optionally enable streaming mode
             )
 
+            print("\n" + "="*30 + " DATASET INFO " + "="*30)
+            print("Split names:", raw_datasets.keys())
+            for split_name, split_data in raw_datasets.items():
+                print(f"\n[{split_name.upper()}]")
+                print("Columns:", split_data.column_names)
+                try:
+                    print("Example row:")
+                    print(split_data[0])  # single example, unformatted
+                except Exception as e:
+                    print(f"  Could not preview row: {e}")
+            print("="*72 + "\n")
+
             for key in columns_to_keep:
                 if columns_to_keep[key] not in raw_datasets["train"].column_names:
                     raise ValueError(
@@ -489,26 +501,35 @@ def main():
         # And ADD another .map() call right after it.
 
         with accelerator.local_main_process_first():
-            # This is your existing .map() call for text tokenization
+
+            # --- STEP 1: Tokenize text first ---
+            # This will take the raw text columns and create 'input_ids' and 'prompt_input_ids',
+            # while keeping the other columns we need (like the audio column).
             vectorized_datasets = raw_datasets.map(
                 pass_through_processors,
-                remove_columns=next(iter(raw_datasets.values())).column_names,
                 input_columns=[description_column_name, prompt_column_name],
+                # DO NOT remove all columns yet.
                 num_proc=num_workers,
-                desc="preprocess datasets",
+                desc="Tokenizing text",
             )
-            
-            # --- ADD THIS NEW .map() CALL ---
-            # This applies our audio prompt logic to every sample in the dataset.
+
+            # --- STEP 2: Create audio prompts from the audio column ---
+            # Now that text is tokenized, process the audio.
+            # This adds 'audio_prompt' and the masks to the dataset.
             logger.info("Creating audio prompts and attention masks...")
             vectorized_datasets = vectorized_datasets.map(
                 create_audio_prompts_and_masks,
                 fn_kwargs={"data_args": data_args, "training_args": training_args, "sampling_rate": sampling_rate, "max_target_length": max_target_length},
                 batched=True,
-                batch_size=training_args.per_device_train_batch_size, # Process in batches for efficiency
+                batch_size=training_args.per_device_train_batch_size,
                 num_proc=num_workers,
                 desc="Creating audio prompts",
             )
+            
+            # --- STEP 3: Clean up unnecessary raw columns ---
+            # Now that everything is processed, we can remove the original raw columns.
+            columns_to_remove = [description_column_name, prompt_column_name, data_args.target_audio_column_name]
+            vectorized_datasets = vectorized_datasets.remove_columns(columns_to_remove)
         # We use Accelerate to perform distributed inference
         # T5 doesn't support fp16
         autocast_kwargs = AutocastKwargs(enabled=(mixed_precision != "fp16"))
