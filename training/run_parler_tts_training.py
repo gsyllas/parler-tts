@@ -84,72 +84,67 @@ def create_attention_mask(max_length, original_length):
     mask[:original_length] = 1
     return mask
 
+# Location: In run_parler_tts_training.py, before def main():
+
 def create_audio_prompts_and_masks(batch, data_args, training_args, sampling_rate, max_target_length):
     """
-    This function processes a batch of data to create:
-    1. A random audio segment to be used as a style prompt.
-    2. An attention mask for this audio prompt.
-    3. An attention mask for the full target audio (for feature matching loss).
+    EFFICIENT VERSION:
+    This function processes a batch by loading audio from paths just-in-time.
+    It adds padded audio prompts, padded target audio, and their masks to the batch.
+    It does NOT keep the full audio in memory.
     """
-    target_audios_list = [audio["array"] for audio in batch[data_args.target_audio_column_name]]
+    # Load audio waveforms from the paths provided in the batch
+    audio_paths = [audio["path"] for audio in batch[data_args.target_audio_column_name]]
+    target_audios_list = [torchaudio.load(path)[0].squeeze(0) for path in audio_paths]
     original_audio_lengths = [len(audio) for audio in target_audios_list]
 
     audio_prompts = []
     
-    # Use the configurable arguments for segment length
     segment_factor_range = (training_args.audio_prompt_segment_min_factor, training_args.audio_prompt_segment_max_factor)
 
     for audio, length in zip(target_audios_list, original_audio_lengths):
-        # Determine the length of the style prompt segment
         segment_length = int(random.uniform(*segment_factor_range) * length)
         segment_length = min(segment_length, length)
-
-        # Extract the random segment
         if length > segment_length:
             start_point = random.randint(0, length - segment_length)
             audio_prompts.append(audio[start_point : start_point + segment_length])
         else:
-            audio_prompts.append(audio) # Use the whole audio if it's too short
+            audio_prompts.append(audio)
 
-    # Get the downsample factor from arguments
     downsample_factor = training_args.audio_prompt_encoder_downsample_factor
     max_len_samples = max_target_length
 
-    # --- Process and Pad for the Batch ---
     padded_prompts_batch = []
     prompt_masks_batch = []
+    padded_targets_batch = []
     target_masks_batch = []
 
     for i, prompt in enumerate(audio_prompts):
         # --- Audio Prompt Processing ---
-        # Pad the audio prompt waveform to max_len_samples
         prompt_padding_needed = max(0, max_len_samples - len(prompt))
-        padded_prompts_batch.append(torch.nn.functional.pad(torch.tensor(prompt), (0, prompt_padding_needed)))
+        padded_prompts_batch.append(torch.nn.functional.pad(prompt, (0, prompt_padding_needed)))
 
-        # Create the attention mask for the padded prompt
         original_len_frames = len(prompt) // downsample_factor
         max_len_frames = max_len_samples // downsample_factor
         prompt_masks_batch.append(create_attention_mask(max_len_frames, original_len_frames))
         
-        # --- Target Audio Mask Processing ---
-        # Create attention mask for the full target audio (for feature matching loss)
+        # --- Target Audio Processing ---
+        target_audio = target_audios_list[i]
+        target_padding_needed = max(0, max_len_samples - len(target_audio))
+        padded_targets_batch.append(torch.nn.functional.pad(target_audio, (0, target_padding_needed)))
+        
         original_target_len_frames = original_audio_lengths[i] // downsample_factor
         target_masks_batch.append(create_attention_mask(max_len_frames, original_target_len_frames))
 
-    # Add the new processed data back to the batch dictionary
+    # Add the new processed tensors back to the batch dictionary
     batch["audio_prompt"] = padded_prompts_batch
     batch["audio_prompt_attention_mask"] = prompt_masks_batch
+    batch["target_audio"] = padded_targets_batch # This now contains the padded target audio
     batch["target_audio_attention_mask"] = target_masks_batch
     
-
-    # make a uniformly-padded copy of the *full* target wave for ECAPA & collator 
-    padded_target = [] 
-    for wav in target_audios_list:
-        cut = wav[:max_len_samples] # truncate if longer
-        pad = max(0, max_len_samples - len(cut))
-        padded_target.append(torch.nn.functional.pad(torch.tensor(cut), (0, pad)))
-    batch["target_audio"] = padded_target # <-- NEW
-    batch["speaker_id"] = [0] * len(padded_target) # placeholder; swap if you have real IDs
+    # Placeholder speaker_id. If you have real ones, they should be in the batch already.
+    if "speaker_id" not in batch:
+         batch["speaker_id"] = [0] * len(audio_paths)
 
     return batch
 def main():
@@ -502,32 +497,27 @@ def main():
 
         with accelerator.local_main_process_first():
 
-            # --- STEP 1: Tokenize text first ---
-            # This will take the raw text columns and create 'input_ids' and 'prompt_input_ids',
-            # while keeping the other columns we need (like the audio column).
+            # STEP 1: Tokenize text. This is fast and we keep the audio path column.
             vectorized_datasets = raw_datasets.map(
                 pass_through_processors,
                 input_columns=[description_column_name, prompt_column_name],
-                # DO NOT remove all columns yet.
                 num_proc=num_workers,
                 desc="Tokenizing text",
             )
 
-            # --- STEP 2: Create audio prompts from the audio column ---
-            # Now that text is tokenized, process the audio.
-            # This adds 'audio_prompt' and the masks to the dataset.
+            # STEP 2 (EFFICIENT): Process audio just-in-time and create prompts.
+            # This loads audio from paths, processes it, and adds the final tensors.
             logger.info("Creating audio prompts and attention masks...")
             vectorized_datasets = vectorized_datasets.map(
                 create_audio_prompts_and_masks,
                 fn_kwargs={"data_args": data_args, "training_args": training_args, "sampling_rate": sampling_rate, "max_target_length": max_target_length},
                 batched=True,
-                batch_size=training_args.per_device_train_batch_size,
-                num_proc=num_workers,
+                batch_size=16, # Use a small batch size for mapping as it loads audio
+                num_proc=data_args.preprocessing_num_workers,
                 desc="Creating audio prompts",
             )
             
-            # --- STEP 3: Clean up unnecessary raw columns ---
-            # Now that everything is processed, we can remove the original raw columns.
+            # STEP 3: Clean up. Remove the raw text and the now-redundant audio path column.
             columns_to_remove = [description_column_name, prompt_column_name, data_args.target_audio_column_name]
             vectorized_datasets = vectorized_datasets.remove_columns(columns_to_remove)
         # We use Accelerate to perform distributed inference
