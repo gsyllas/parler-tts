@@ -86,16 +86,16 @@ def create_attention_mask(max_length, original_length):
 
 # Location: In run_parler_tts_training.py, before def main():
 
-def create_audio_prompts_and_masks(batch, data_args, training_args, sampling_rate, max_target_length):
+# Location: In run_parler_tts_training.py, before def main():
+
+def create_audio_prompts_and_masks(batch, data_args, training_args, max_target_length):
     """
-    EFFICIENT VERSION:
-    This function processes a batch by loading audio from paths just-in-time.
-    It adds padded audio prompts, padded target audio, and their masks to the batch.
-    It does NOT keep the full audio in memory.
+    EFFICIENT AND CORRECTED VERSION:
+    This function now correctly handles audio paths from the Hugging Face datasets library.
     """
-    # Load audio waveforms from the paths provided in the batch
-    audio_paths = [audio["path"] for audio in batch[data_args.target_audio_column_name]]
-    target_audios_list = [torchaudio.load(path)[0].squeeze(0) for path in audio_paths]
+    # The 'target_audio' column is an Audio feature. It's a list of dicts.
+    # Each dict has 'path' and 'array'. We need the 'array' for processing.
+    target_audios_list = [audio["array"] for audio in batch[data_args.target_audio_column_name]]
     original_audio_lengths = [len(audio) for audio in target_audios_list]
 
     audio_prompts = []
@@ -121,30 +121,29 @@ def create_audio_prompts_and_masks(batch, data_args, training_args, sampling_rat
 
     for i, prompt in enumerate(audio_prompts):
         # --- Audio Prompt Processing ---
-        prompt_padding_needed = max(0, max_len_samples - len(prompt))
-        padded_prompts_batch.append(torch.nn.functional.pad(prompt, (0, prompt_padding_needed)))
+        prompt_tensor = torch.from_numpy(prompt).float()
+        prompt_padding_needed = max(0, max_len_samples - prompt_tensor.shape[0])
+        padded_prompts_batch.append(torch.nn.functional.pad(prompt_tensor, (0, prompt_padding_needed)))
 
-        original_len_frames = len(prompt) // downsample_factor
+        original_len_frames = prompt_tensor.shape[0] // downsample_factor
         max_len_frames = max_len_samples // downsample_factor
         prompt_masks_batch.append(create_attention_mask(max_len_frames, original_len_frames))
         
         # --- Target Audio Processing ---
-        target_audio = target_audios_list[i]
-        target_padding_needed = max(0, max_len_samples - len(target_audio))
-        padded_targets_batch.append(torch.nn.functional.pad(target_audio, (0, target_padding_needed)))
+        target_tensor = torch.from_numpy(target_audios_list[i]).float()
+        target_padding_needed = max(0, max_len_samples - target_tensor.shape[0])
+        padded_targets_batch.append(torch.nn.functional.pad(target_tensor, (0, target_padding_needed)))
         
         original_target_len_frames = original_audio_lengths[i] // downsample_factor
         target_masks_batch.append(create_attention_mask(max_len_frames, original_target_len_frames))
 
-    # Add the new processed tensors back to the batch dictionary
     batch["audio_prompt"] = padded_prompts_batch
     batch["audio_prompt_attention_mask"] = prompt_masks_batch
-    batch["target_audio"] = padded_targets_batch # This now contains the padded target audio
+    batch["target_audio"] = padded_targets_batch
     batch["target_audio_attention_mask"] = target_masks_batch
     
-    # Placeholder speaker_id. If you have real ones, they should be in the batch already.
     if "speaker_id" not in batch:
-         batch["speaker_id"] = [0] * len(audio_paths)
+         batch["speaker_id"] = [0] * len(target_audios_list)
 
     return batch
 def main():
@@ -510,7 +509,7 @@ def main():
             logger.info("Creating audio prompts and attention masks...")
             vectorized_datasets = vectorized_datasets.map(
                 create_audio_prompts_and_masks,
-                fn_kwargs={"data_args": data_args, "training_args": training_args, "sampling_rate": sampling_rate, "max_target_length": max_target_length},
+                fn_kwargs={"data_args": data_args, "training_args": training_args, "max_target_length": max_target_length},
                 batched=True,
                 batch_size=16, # Use a small batch size for mapping as it loads audio
                 num_proc=data_args.preprocessing_num_workers,
