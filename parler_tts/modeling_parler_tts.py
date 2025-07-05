@@ -2429,7 +2429,7 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
         self.audio_encoder = audio_encoder
         self.decoder = decoder
         self.audio_prompt_encoder = AudioPromptEncoder()  # Create an instance
-        self.fusion_module = CrossAttentionFusion(audio_token_dim=1024, audio_feature_dim=768)  # Correct dimensions
+        self.fusion_module = CrossAttentionFusion(audio_token_dim=self.decoder.config.hidden_size, audio_feature_dim=768)  # Correct dimensions
 
         if self.text_encoder.config.to_dict() != self.config.text_encoder.to_dict():
             logger.warning(
@@ -2762,6 +2762,7 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
         )
         return cls(text_encoder=text_encoder, audio_encoder=audio_encoder, decoder=decoder, config=config)
 
+
     @add_start_docstrings_to_model_forward(MUSICGEN_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=ParlerTTSSeq2SeqLMOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
@@ -2776,11 +2777,15 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
         past_key_values: Optional[Union[EncoderDecoderCache, Tuple[torch.FloatTensor]]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         decoder_inputs_embeds: Optional[torch.FloatTensor] = None,
+
+        # --- CHANGE 1: ADD AUDIO PROMPT ARGUMENTS TO THE SIGNATURE ---
         prompt_input_ids: Optional[torch.FloatTensor] = None,
         prompt_attention_mask: Optional[torch.LongTensor] = None,
-        prompt_hidden_states: Optional[torch.FloatTensor] = None,
         audio_prompt: Optional[torch.FloatTensor] = None,  # ADDED
         audio_prompt_attention_mask: Optional[torch.LongTensor] = None,  # ADDED
+        # --- END CHANGE 1 ---
+
+        prompt_hidden_states: Optional[torch.FloatTensor] = None,
         decoder_position_ids: Optional[torch.LongTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
@@ -2931,16 +2936,29 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
             use_cache=use_cache,
             past_key_values=past_key_values,
             return_dict=return_dict,
-            labels=labels,
+            labels=None,
+            # labels=labels,
             cache_position=cache_position,
             loss_reduction=loss_reduction,
             **kwargs_decoder,
         )
+
+        # In ParlerTTSForCausalLM, the hidden states before the LM head
+        # are returned in the `logits` field when loss is not calculated.
+        hidden_states_before_fusion = decoder_outputs.logits
+
         # 6. Audio Prompt Encoding (NEW)
         if audio_prompt is not None:  # Only encode if provided
             audio_prompt_features = self.audio_prompt_encoder(audio_prompt, attention_mask=audio_prompt_attention_mask)
+            fused_hidden_states = self.fusion_module(
+            audio_tokens=hidden_states_before_fusion,
+            audio_features=audio_prompt_features,
+            audio_features_attention_mask=audio_prompt_attention_mask
+        )
         else:
             audio_prompt_features = None
+            fused_hidden_states = hidden_states_before_fusion
+
 
         # 7. Fusion (Cross-Attention) (NEW)
         if audio_prompt_features is not None:
@@ -2951,24 +2969,54 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
             if audio_prompt_features is not None:
                 return (fused_audio_tokens,) + decoder_outputs[1:] + (encoder_hidden_states,)
             return decoder_outputs + (encoder_hidden_states,)
-
-        if audio_prompt_features is not None: #NEW
-            return ParlerTTSSeq2SeqLMOutput(
-                loss=decoder_outputs.loss,
-                logits=fused_audio_tokens,  # Use fused tokens as logits
-                past_key_values=decoder_outputs.past_key_values,
-                decoder_hidden_states=decoder_outputs.hidden_states,
-                decoder_attentions=decoder_outputs.attentions,
-                cross_attentions=decoder_outputs.cross_attentions,
-                encoder_last_hidden_state=encoder_outputs.last_hidden_state,
-                encoder_hidden_states=encoder_outputs.hidden_states,
-                encoder_attentions=encoder_outputs.attentions,
-                per_codebook_losses=decoder_outputs.per_codebook_losses,
-            )
         
+        # --- CHANGE 4: FINAL LOGITS AND LOSS CALCULATION ON FUSED STATES ---
+        # We now manually perform the steps that were previously inside the decoder's forward pass.
+        # This ensures the loss is calculated on the `fused_hidden_states`.
+        lm_heads = self.decoder.get_output_embeddings()
+        if self.decoder.use_fused_lm_heads:
+            logits = lm_heads(fused_hidden_states).view(
+                fused_hidden_states.shape[0], -1, self.decoder.num_codebooks, self.decoder.vocab_size
+            ).transpose(1, 2)
+        else:
+            logits = torch.stack([head(fused_hidden_states) for head in lm_heads], dim=1)
+
+        loss = None
+        per_codebook_losses = None
+        if labels is not None:
+            loss_fct = CrossEntropyLoss(reduction=loss_reduction)
+            loss = torch.tensor(0.0, device=self.device)
+            per_codebook_losses = []
+            
+            logits_for_loss = logits[:, :, -labels.shape[1]:]
+            
+            for codebook in range(self.decoder.num_codebooks):
+                cb_logits = logits_for_loss[:, codebook].contiguous().view(-1, self.decoder.vocab_size)
+                cb_labels = labels[..., codebook].contiguous().view(-1)
+                
+                mask = cb_labels != -100
+                if mask.sum() > 0:
+                    cb_loss = loss_fct(cb_logits[mask], cb_labels[mask])
+                    per_codebook_losses.append(cb_loss)
+                    weight = self.config.decoder.codebook_weights[codebook] if self.config.decoder.codebook_weights else 1.0
+                    loss += cb_loss * weight
+            
+            if self.config.decoder.codebook_weights:
+                loss /= sum(self.config.decoder.codebook_weights)
+            else:
+                loss /= self.decoder.num_codebooks
+        
+        logits = logits.reshape(-1, *logits.shape[2:])
+
+        # --- CHANGE 5: CONSTRUCT FINAL OUTPUT ---
+        # The return statement now uses the newly computed `loss` and `logits`.
+        if not return_dict:
+            output = (logits,) + decoder_outputs[1:]
+            return (loss,) + output if loss is not None else output
+
         return ParlerTTSSeq2SeqLMOutput(
-            loss=decoder_outputs.loss,
-            logits=decoder_outputs.logits,
+            loss=loss,
+            logits=logits,
             past_key_values=decoder_outputs.past_key_values,
             decoder_hidden_states=decoder_outputs.hidden_states,
             decoder_attentions=decoder_outputs.attentions,
@@ -2976,9 +3024,8 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
             encoder_last_hidden_state=encoder_outputs.last_hidden_state,
             encoder_hidden_states=encoder_outputs.hidden_states,
             encoder_attentions=encoder_outputs.attentions,
-            per_codebook_losses=decoder_outputs.per_codebook_losses,
+            per_codebook_losses=per_codebook_losses,
         )
-
     def prepare_inputs_for_generation(
         self,
         decoder_input_ids,

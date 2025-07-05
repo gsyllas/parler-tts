@@ -88,62 +88,43 @@ def create_attention_mask(max_length, original_length):
 
 # Location: In run_parler_tts_training.py, before def main():
 
-def create_audio_prompts_and_masks(batch, data_args, training_args, max_target_length):
-    """
-    EFFICIENT AND CORRECTED VERSION:
-    This function now correctly handles audio paths from the Hugging Face datasets library.
-    """
-    # The 'target_audio' column is an Audio feature. It's a list of dicts.
-    # Each dict has 'path' and 'array'. We need the 'array' for processing.
-    target_audios_list = [audio["array"] for audio in batch[data_args.target_audio_column_name]]
-    original_audio_lengths = [len(audio) for audio in target_audios_list]
+# In run_parler_tts_training.py, before def main():
 
+def create_unpadded_audio_prompts(batch, data_args, training_args):
+    """
+    Corrected and Simplified Mapping Function.
+    This function's ONLY job is to create UNPADDED audio columns from the raw audio.
+    1. Slices a random segment for the audio prompt.
+    2. Keeps the full audio for the speaker consistency loss.
+    Padding and attention masks will be handled entirely by the DataCollator.
+    """
+    # The 'target_audio' column is an Audio feature, which is a list of dicts.
+    # We extract the raw numpy arrays for processing.
+    target_audios_list = [audio["array"] for audio in batch[data_args.target_audio_column_name]]
+
+    # These new lists will hold our unpadded audio arrays.
     audio_prompts = []
     
     segment_factor_range = (training_args.audio_prompt_segment_min_factor, training_args.audio_prompt_segment_max_factor)
 
-    for audio, length in zip(target_audios_list, original_audio_lengths):
+    for audio_array in target_audios_list:
+        length = len(audio_array)
+        # Calculate the length of the segment to extract
         segment_length = int(random.uniform(*segment_factor_range) * length)
-        segment_length = min(segment_length, length)
+        # Ensure segment_length is valid (at least 1 sample, not longer than the audio)
+        segment_length = max(1, min(segment_length, length))
+
         if length > segment_length:
             start_point = random.randint(0, length - segment_length)
-            audio_prompts.append(audio[start_point : start_point + segment_length])
+            audio_prompts.append(audio_array[start_point : start_point + segment_length])
         else:
-            audio_prompts.append(audio)
-
-    downsample_factor = training_args.audio_prompt_encoder_downsample_factor
-    max_len_samples = max_target_length
-
-    padded_prompts_batch = []
-    prompt_masks_batch = []
-    padded_targets_batch = []
-    target_masks_batch = []
-
-    for i, prompt in enumerate(audio_prompts):
-        # --- Audio Prompt Processing ---
-        prompt_tensor = torch.from_numpy(prompt).float()
-        prompt_padding_needed = max(0, max_len_samples - prompt_tensor.shape[0])
-        padded_prompts_batch.append(torch.nn.functional.pad(prompt_tensor, (0, prompt_padding_needed)))
-
-        original_len_frames = prompt_tensor.shape[0] // downsample_factor
-        max_len_frames = max_len_samples // downsample_factor
-        prompt_masks_batch.append(create_attention_mask(max_len_frames, original_len_frames))
-        
-        # --- Target Audio Processing ---
-        target_tensor = torch.from_numpy(target_audios_list[i]).float()
-        target_padding_needed = max(0, max_len_samples - target_tensor.shape[0])
-        padded_targets_batch.append(torch.nn.functional.pad(target_tensor, (0, target_padding_needed)))
-        
-        original_target_len_frames = original_audio_lengths[i] // downsample_factor
-        target_masks_batch.append(create_attention_mask(max_len_frames, original_target_len_frames))
-
-    batch["audio_prompt"] = padded_prompts_batch
-    batch["audio_prompt_attention_mask"] = prompt_masks_batch
-    batch["target_audio"] = padded_targets_batch
-    batch["target_audio_attention_mask"] = target_masks_batch
-    
-    if "speaker_id" not in batch:
-         batch["speaker_id"] = [0] * len(target_audios_list)
+            # If the audio is shorter than the desired segment, use the whole thing
+            audio_prompts.append(audio_array)
+            
+    # Add the new columns of unpadded audio to the batch.
+    # The DataCollator will see these columns and pad them correctly.
+    batch["prompt_input_values"] = audio_prompts
+    batch["target_audio_for_spk_loss"] = target_audios_list
 
     return batch
 def main():
@@ -504,18 +485,20 @@ def main():
                 desc="Tokenizing text",
             )
 
-            # STEP 2 (EFFICIENT): Process audio just-in-time and create prompts.
-            # This loads audio from paths, processes it, and adds the final tensors.
-            logger.info("Creating audio prompts and attention masks...")
+            # ======================================================================
+            # <<< --- THIS IS THE CORRECTED DATA PREPARATION STEP --- >>>
+            # ======================================================================
+            # STEP 2: Create the unpadded audio prompts and targets using our new function.
+            logger.info("Creating unpadded audio prompts...")
             vectorized_datasets = vectorized_datasets.map(
-                create_audio_prompts_and_masks,
-                fn_kwargs={"data_args": data_args, "training_args": training_args, "max_target_length": max_target_length},
+                create_unpadded_audio_prompts,  # Use the new, clean function
+                fn_kwargs={"data_args": data_args, "training_args": training_args},
                 batched=True,
-                batch_size=16, # Use a small batch size for mapping as it loads audio
+                batch_size=16, # A small batch size is good for memory since we're loading audio
                 num_proc=data_args.preprocessing_num_workers,
                 desc="Creating audio prompts",
             )
-            
+
             # STEP 3: Clean up. Remove the raw text and the now-redundant audio path column.
             columns_to_remove = [description_column_name, prompt_column_name, data_args.target_audio_column_name]
             vectorized_datasets = vectorized_datasets.remove_columns(columns_to_remove)
@@ -994,56 +977,37 @@ def main():
 
 # Location: Inside main(), replacing the old train_step function.
 
+# In main()
     # Define gradient update step fn
     def train_step(
         batch,
         accelerator,
         autocast_kwargs,
-        num_items_in_batch,
-        gradient_accumulation_steps,
-        training_args, # Pass the full training_args
+        training_args,
+        spk_enc,
     ):
         model.train()
-        unwrapped_model = accelerator.unwrap_model(model)
         
         with accelerator.autocast(**autocast_kwargs):
-            # The model's forward pass will internally handle the fusion.
-            # It returns the standard Seq2SeqLMOutput, but the `logits` field
-            # now contains the `fused_audio_tokens`.
-            outputs = model(**batch, loss_reduction="sum")
+            # The corrected model forward pass now handles everything internally.
+            # The batch from our new collator provides all necessary inputs.
+            outputs = model(**batch, return_dict=True)
             
-            # This is the Cross-Entropy loss from the decoder, now calculated on the fused tokens.
-            ce_loss = (outputs.loss * gradient_accumulation_steps * accelerator.num_processes) / num_items_in_batch
+            ce_loss = outputs.loss
             
-            # These are the fused hidden states after audio prompt conditioning.
-            fused_hidden_states = outputs.logits
-
-            # --- Feature Matching Loss (in hidden state space) ---
+            # Speaker Consistency Loss
             with torch.no_grad():
-                # Encode the ground-truth audio prompt to get its style vector
-                prompt_features = unwrapped_model.audio_prompt_encoder(batch["audio_prompt"], attention_mask=batch["audio_prompt_attention_mask"])
-
-            # Compare the style of the fused output with the style of the prompt.
-            # We take the mean over the sequence length for a global style vector comparison.
-            generated_style_vector = torch.mean(fused_hidden_states, dim=1)
-            prompt_style_vector = torch.mean(prompt_features, dim=1)
-
-            # ECAPA stays frozen
-            ref_emb = spk_enc.encode_batch(batch["audio_prompt"]).squeeze(1) # (B,192)
-            gen_emb = spk_enc.encode_batch(batch["target_audio"].detach()).squeeze(1)
-            spk_loss = 1 - torch.nn.functional.cosine_similarity(ref_emb, gen_emb, dim=-1).mean()
+                # Use the dedicated padded columns from the collator for the speaker encoder
+                ref_emb = spk_enc.encode_batch(batch["prompt_input_values"]).squeeze(1)
+                gen_emb = spk_enc.encode_batch(batch["target_audio_for_spk_loss"]).squeeze(1)
+                spk_loss = 1 - torch.nn.functional.cosine_similarity(ref_emb, gen_emb, dim=-1).mean()
             
-            total_loss = ce_loss + training_args.feature_matching_weight * spk_loss
-            
-            
-
-            # --- Total Loss ---
             total_loss = ce_loss + (training_args.feature_matching_weight * spk_loss)
 
         # Prepare metrics for logging
         metrics = {"ce_loss": ce_loss.detach(), "spk_loss": spk_loss.detach(), "total_loss": total_loss.detach()}
         if outputs.per_codebook_losses is not None:
-             metrics.update({f"codebook_{i}_loss": ((l.detach() * gradient_accumulation_steps * accelerator.num_processes) / num_items_in_batch) for (i,l) in enumerate(outputs.per_codebook_losses)})
+             metrics.update({f"codebook_{i}_loss": l.detach() for i, l in enumerate(outputs.per_codebook_losses)})
 
         return total_loss, metrics
 
@@ -1170,7 +1134,7 @@ def main():
                 
                 with ctx():
                     # Update this line to pass training_args
-                    loss, train_metric = train_step(batch, accelerator, autocast_kwargs, num_items_in_batch, gradient_accumulation_steps, training_args)
+                    loss, train_metric = train_step(batch, accelerator, autocast_kwargs, training_args, spk_enc)
                     accelerator.backward(loss)
                     # losses.append(loss.detach())
             

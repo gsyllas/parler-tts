@@ -42,100 +42,66 @@ class DataCollatorEncodecWithPadding:
         return batch
 
 
+# In data.py
+
 @dataclass
 class DataCollatorParlerTTSWithPadding:
     """
-    Data collator that will dynamically pad the inputs received.
-    Args:
-        prompt_tokenizer (:class:`~transformers.AutoTokenizer`)
-            The prompt_tokenizer used for proccessing the data.
-        description_tokenizer (:class:`~transformers.AutoTokenizer`)
-            The description_tokenizer used for proccessing the data.
-        padding (:obj:`bool`, :obj:`str` or :class:`~transformers.tokenization_utils_base.PaddingStrategy`, `optional`, defaults to :obj:`True`):
-            Select a strategy to pad the returned sequences (according to the model's padding side and padding index)
-            among:
-            * :obj:`True` or :obj:`'longest'`: Pad to the longest sequence in the batch (or no padding if only a single
-              sequence if provided).
-            * :obj:`'max_length'`: Pad to a maximum length specified with the argument :obj:`max_length` or to the
-              maximum acceptable input length for the model if that argument is not provided.
-            * :obj:`False` or :obj:`'do_not_pad'` (default): No padding (i.e., can output a batch with sequences of
-              different lengths).
-        pad_to_multiple_of (:obj:`int`, `optional`):
-            If set will pad the sequence to a multiple of the provided value.
-            This is especially useful to enable the use of Tensor Cores on NVIDIA hardware with compute capability >=
-            7.5 (Volta).
+    Corrected and streamlined data collator. It expects unpadded data from the
+    dataset mapping function and handles all padding dynamically.
     """
-
     prompt_tokenizer: AutoTokenizer
     description_tokenizer: AutoTokenizer
     padding: Union[bool, str] = "longest"
     pad_to_multiple_of: Optional[int] = None
     prompt_max_length: Optional[int] = None
     description_max_length: Optional[int] = None
-    audio_max_length: Optional[int] = None
+    audio_max_length: Optional[int] = None # For tokenized audio labels
 
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-        # --- Existing Label and Text Handling (KEEP AS IS) ---
+        batch = {}
+
+        # --- 1. Pad Text Inputs ---
+        # Descriptions (style text) -> becomes `prompt_input_ids` for the model
+        descriptions = [{"input_ids": feature["input_ids"]} for feature in features]
+        padded_descs = self.description_tokenizer.pad(
+            descriptions, return_tensors="pt", padding=self.padding, max_length=self.description_max_length, pad_to_multiple_of=self.pad_to_multiple_of
+        )
+        batch["prompt_input_ids"] = padded_descs["input_ids"]
+        batch["prompt_attention_mask"] = padded_descs["attention_mask"]
+
+        # Transcripts (content text) -> becomes `input_ids` for the model
+        transcripts = [{"input_ids": feature["prompt_input_ids"]} for feature in features]
+        padded_transcripts = self.prompt_tokenizer.pad(
+            transcripts, return_tensors="pt", padding=self.padding, max_length=self.prompt_max_length, pad_to_multiple_of=self.pad_to_multiple_of
+        )
+        batch["input_ids"] = padded_transcripts["input_ids"]
+        batch["attention_mask"] = padded_transcripts["attention_mask"]
+
+        # --- 2. Pad Audio Labels (Tokenized Full Audio) ---
+        # This is for the main Cross-Entropy loss.
         labels = [torch.tensor(feature["labels"]).transpose(0, 1) for feature in features]
-        # (bsz, seq_len, num_codebooks)
-        labels = torch.nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=-100)
-        if self.audio_max_length is not None and self.padding == "max_length":
-            labels = torch.nn.functional.pad(
-                labels, pad=(0, 0, 0, max(self.audio_max_length - labels.shape[1], 0)), value=-100
-            )
+        batch["labels"] = torch.nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=-100)
 
-        input_ids = [{"input_ids": feature["input_ids"]} for feature in features]
-        input_ids = self.description_tokenizer.pad(
-            input_ids,
-            return_tensors="pt",
-            padding=self.padding,
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            max_length=self.description_max_length,
-        )
+        # --- 3. Pad Raw Audio Waveforms for Prompts and Speaker Loss ---
+        # These columns were created by our `create_unpadded_audio_prompts` function.
+        
+        # Pad the audio prompt
+        audio_prompts = [torch.tensor(f["prompt_input_values"], dtype=torch.float32) for f in features]
+        batch["audio_prompt"] = torch.nn.utils.rnn.pad_sequence(audio_prompts, batch_first=True, padding_value=0.0)
+        
+        # Create an attention mask for the padded audio prompt
+        prompt_lengths = [len(p) for p in audio_prompts]
+        prompt_masks = [torch.ones(l, dtype=torch.long) for l in prompt_lengths]
+        batch["audio_prompt_attention_mask"] = torch.nn.utils.rnn.pad_sequence(prompt_masks, batch_first=True, padding_value=0)
+        
+        # Pad the full target audio for the speaker consistency loss
+        target_audios_for_loss = [torch.tensor(f["target_audio_for_spk_loss"], dtype=torch.float32) for f in features]
+        batch["target_audio_for_spk_loss"] = torch.nn.utils.rnn.pad_sequence(target_audios_for_loss, batch_first=True, padding_value=0.0)
 
-        batch = {"labels": labels, **input_ids} #KEEP AS IS
-
-        prompt_input_ids = [{"input_ids": feature["prompt_input_ids"]} for feature in features]
-        prompt_input_ids = self.prompt_tokenizer.pad(
-            prompt_input_ids,
-            return_tensors="pt",
-            padding=self.padding,
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            max_length=self.prompt_max_length,
-        )
-
-        batch["prompt_input_ids"] = prompt_input_ids["input_ids"]
-        if "attention_mask" in prompt_input_ids:
-            batch["prompt_attention_mask"] = prompt_input_ids["attention_mask"]
-
-        # --- NEW: Audio Prompt + Target Handling (padded) ---
-        max_prompt_len  = max(v.size(0) for v in [torch.tensor(f["audio_prompt"]) for f in features])
-        max_target_len  = max(v.size(0) for v in [torch.tensor(f["target_audio"]) for f in features])
-
-        def pad1d(t, L):  # helper
-            return torch.nn.functional.pad(torch.tensor(t, dtype=torch.float32), (0, L - len(t)))
-
-        audio_prompts  = torch.stack([pad1d(f["audio_prompt"],  max_prompt_len) for f in features])
-        target_audios  = torch.stack([pad1d(f["target_audio"],  max_target_len) for f in features])
-
-        audio_prompt_attention_masks = torch.stack(
-            [pad1d(f["audio_prompt_attention_mask"],  max_prompt_len // training_args.audio_prompt_encoder_downsample_factor)
-            for f in features]
-        )
-        target_audio_attention_masks = torch.stack(
-            [pad1d(f["target_audio_attention_mask"],  max_target_len // training_args.audio_prompt_encoder_downsample_factor)
-            for f in features]
-        )
-        speaker_ids = torch.tensor([f.get("speaker_id", 0) for f in features], dtype=torch.long)
-
-        batch.update({
-            "audio_prompt":                audio_prompts,
-            "audio_prompt_attention_mask": audio_prompt_attention_masks,
-            "target_audio":                target_audios,
-            "target_audio_attention_mask": target_audio_attention_masks,
-            "speaker_id":                  speaker_ids,
-        })
-
+        # Note: The model's forward signature in the previous step uses `audio_prompt` and `audio_prompt_attention_mask`
+        # for these inputs, which matches the keys we are creating here.
+        
         return batch
 
 def convert_dataset_str_to_list(
