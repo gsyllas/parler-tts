@@ -107,10 +107,29 @@ class AudioPromptEncoder(nn.Module):
         self.projection = nn.Linear(self.config.hidden_size, 768) #Project to the correct size
 
     def forward(self, audio_input, attention_mask=None):
-        inputs = self.feature_extractor(audio_input, return_tensors="pt", sampling_rate=16000, padding=True) #Added feature extractor
-        outputs = self.hubert(inputs.input_values.squeeze(0), attention_mask=inputs.attention_mask) #inputs.attention_mask contains the attention mask
+        # The feature extractor is best used on a list of individual waveforms.
+        # We also need to ensure the input is on the CPU as a numpy array.
+        input_list = [wav for wav in audio_input.cpu().numpy()]
+        
+        # Process with the feature extractor
+        inputs = self.feature_extractor(
+            input_list, 
+            sampling_rate=16000, # Use the rate expected by Hubert
+            return_tensors="pt", 
+            padding=True
+        )
+
+        # Move the extracted values to the same device as the Hubert model
+        input_values = inputs.input_values.to(self.hubert.device)
+
+        # Pass to Hubert. It expects a batch dimension.
+        outputs = self.hubert(input_values)
+        
         audio_features = outputs.last_hidden_state
+        
+        # Project to the dimension expected by the fusion module
         projected_features = self.projection(audio_features)
+        
         return projected_features
 
 class CrossAttentionFusion(nn.Module):
@@ -2945,18 +2964,20 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
 
         # In ParlerTTSForCausalLM, the hidden states before the LM head
         # are returned in the `logits` field when loss is not calculated.
-        hidden_states_before_fusion = decoder_outputs.logits
-
+        hidden_states_before_fusion = decoder_outputs[0]
         # 6. Audio Prompt Encoding (NEW)
-        if audio_prompt is not None:  # Only encode if provided
-            audio_prompt_features = self.audio_prompt_encoder(audio_prompt, attention_mask=audio_prompt_attention_mask)
+# --- Audio Prompt Encoding & Fusion (Your logic) ---
+        if audio_prompt is not None:
+            audio_prompt_features = self.audio_prompt_encoder(
+                audio_prompt, 
+                attention_mask=audio_prompt_attention_mask
+            )
             fused_hidden_states = self.fusion_module(
-            audio_tokens=hidden_states_before_fusion,
-            audio_features=audio_prompt_features,
-            audio_features_attention_mask=audio_prompt_attention_mask
-        )
+                audio_tokens=hidden_states_before_fusion,
+                audio_features=audio_prompt_features,
+                audio_features_attention_mask=audio_prompt_attention_mask
+            )
         else:
-            audio_prompt_features = None
             fused_hidden_states = hidden_states_before_fusion
 
 

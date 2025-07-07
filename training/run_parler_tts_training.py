@@ -988,7 +988,8 @@ def main():
     ):
         model.train()
         
-        with accelerator.autocast(**autocast_kwargs):
+        # with accelerator.autocast(**autocast_kwargs):
+        with accelerator.autocast():
             # The corrected model forward pass now handles everything internally.
             # The batch from our new collator provides all necessary inputs.
             outputs = model(**batch, return_dict=True)
@@ -1021,7 +1022,9 @@ def main():
 
         if mixed_precision == "fp16":
             # fp16 doesn't work with T5-like models
-            with accelerator.autocast(autocast_handler=autocast_kwargs):
+            # with accelerator.autocast(autocast_handler=autocast_kwargs):
+            with accelerator.autocast():
+
                 if training_args.parallel_mode.value != "distributed":
                     encoder_outputs = model.text_encoder(
                         input_ids=batch.get("input_ids"), attention_mask=batch.get("attention_mask", None)
