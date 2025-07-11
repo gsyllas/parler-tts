@@ -16,6 +16,9 @@
 
 """ Train Parler-TTS using 🤗 Accelerate"""
 
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))) #If not locally pls disable
 import logging
 import os
 import re
@@ -66,10 +69,11 @@ from training.utils import (
 from training.arguments import ModelArguments, DataTrainingArguments, ParlerTTSTrainingArguments
 from training.data import load_multiple_datasets, DataCollatorParlerTTSWithPadding, DataCollatorEncodecWithPadding
 from training.eval import clap_similarity, wer, si_sdr
-
+      
+# In run_parler_tts_training.py, inside main()
+import torchaudio
+    
 logger = logging.getLogger(__name__)
-
-
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -270,6 +274,49 @@ def main():
                         f" Make sure to set `--{key}` to the correct audio column - one of"
                         f" {', '.join(raw_datasets['train'].column_names)}."
                     )
+            
+
+            def prepare_audio_prompts(batch):
+                # The audio is in a dictionary format: {'array': ndarray, 'sampling_rate': int}
+                audio_input = batch[data_args.target_audio_column_name]
+                # Convert to a tensor for processing
+                full_waveform = torch.from_numpy(audio_input["array"]).unsqueeze(0)
+                original_sr = audio_input["sampling_rate"]
+                
+                # Ensure mono channel for consistency
+                if full_waveform.shape[0] > 1:
+                    full_waveform = torch.mean(full_waveform, dim=0, keepdim=True)
+
+                # Create the 25% random audio prompt
+                prompt_length = int(0.25 * full_waveform.shape[-1])
+                if prompt_length > 0:
+                    max_start = full_waveform.shape[-1] - prompt_length
+                    start_idx = torch.randint(0, max_start + 1, (1,)).item()
+                    prompt_chunk = full_waveform[..., start_idx : start_idx + prompt_length]
+                else:
+                    # Handle very short audio clips
+                    prompt_chunk = full_waveform
+                
+                # HuBERT expects 16kHz, so we must resample the prompt
+                HUBERT_SR = 16000
+                if original_sr != HUBERT_SR:
+                    hubert_resampler = torchaudio.transforms.Resample(original_sr, HUBERT_SR)
+                    prompt_waveform_resampled = hubert_resampler(prompt_chunk)
+                else:
+                    prompt_waveform_resampled = prompt_chunk
+                
+                # Add the new prompt waveform to the batch as a numpy array to match dataset format
+                batch['prompt_waveform'] = prompt_waveform_resampled.squeeze(0).numpy()
+                return batch
+
+            # This is our new block of code to create the audio prompts
+            with accelerator.local_main_process_first():
+                logger.info("Preparing audio style prompts...")
+                raw_datasets = raw_datasets.map(
+                    prepare_audio_prompts,
+                    num_proc=data_args.preprocessing_num_workers,
+                    desc="Preparing audio prompts",
+                )
 
             if data_args.max_train_samples is not None:
                 raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -373,6 +420,8 @@ def main():
     gathered_tensor = accelerator.gather(test_tensor)
     print("gathered_tensor", gathered_tensor)
     accelerator.wait_for_everyone()
+
+
 
     if not dataset_was_precomputed:
         # Filter on text length

@@ -24,7 +24,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
-from transformers import AutoConfig, AutoModel, AutoModelForTextEncoding
+from transformers import AutoConfig, AutoModel, AutoModelForTextEncoding, HubertModel
 from transformers.activations import ACT2FN
 from transformers.cache_utils import (
     Cache,
@@ -980,6 +980,18 @@ class ParlerTTSDecoderLayer(nn.Module):
         self.fc2 = nn.Linear(config.ffn_dim, self.embed_dim, bias=False)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim)
 
+                # --- ADD THIS BLOCK ---
+        # Add a new cross-attention module specifically for the audio style prompt
+        self.style_cross_attn = ParlerTTSAttention(
+            config.hidden_size,
+            config.num_heads,
+            is_decoder=True,
+            dropout=config.dropout_rate,
+            is_causal=False,
+        )
+        self.style_layer_norm = ParlerTTSLayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        # --- END OF BLOCK ---
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -994,6 +1006,7 @@ class ParlerTTSDecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = True,
         cache_position: Optional[torch.LongTensor] = None,
+                style_encoder_hidden_states=None,
     ) -> torch.Tensor:
         """
         Args:
@@ -1054,6 +1067,17 @@ class ParlerTTSDecoderLayer(nn.Module):
             # add cross-attn to positions 1 of present_key_value tuple
             present_key_value = (present_key_value, cross_attn_present_key_value)
 
+            # --- ADD THIS BLOCK AFTER THE EXISTING CROSS-ATTENTION ---
+        if style_encoder_hidden_states is not None:
+            residual = hidden_states
+            hidden_states, cross_attn_weights, _ = self.style_cross_attn(
+                hidden_states=hidden_states,
+                key_value_states=style_encoder_hidden_states,
+            )
+            hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+            hidden_states = residual + hidden_states
+            hidden_states = self.style_layer_norm(hidden_states)
+        # --- END ADD ---
         # Fully Connected
         residual = hidden_states
         hidden_states = self.final_layer_norm(hidden_states)
@@ -2358,6 +2382,13 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
         self.text_encoder = text_encoder
         self.audio_encoder = audio_encoder
         self.decoder = decoder
+                # --- ADD THIS BLOCK ---
+        # Initialize the HuBERT model for style encoding
+        self.hubert_model = HubertModel.from_pretrained("facebook/hubert-large-ls960-ft")
+        # Freeze the HuBERT model - we only use it for feature extraction
+        for param in self.hubert_model.parameters():
+            param.requires_grad = False
+        # --- END OF BLOCK ---
 
         if self.text_encoder.config.to_dict() != self.config.text_encoder.to_dict():
             logger.warning(
@@ -2695,6 +2726,8 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
+        # --- ADD prompt_waveform ARGUMENT ---
+        prompt_waveform: Optional[torch.FloatTensor] = None,
         attention_mask: Optional[torch.BoolTensor] = None,
         input_values: Optional[torch.FloatTensor] = None,
         padding_mask: Optional[torch.BoolTensor] = None,
@@ -2841,7 +2874,14 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
                 audio_codes = audio_codes.repeat_interleave(2, dim=2)
 
             decoder_input_ids = audio_codes[0, ...].reshape(bsz * self.decoder.num_codebooks, seq_len)
-
+        # --- ADD THIS BLOCK ---
+        style_encoder_hidden_states = None
+        if prompt_waveform is not None:
+            # Ensure HuBERT is in eval mode as it's frozen
+            self.hubert_model.eval()
+            # The prompt_waveform is already pre-processed to 16kHz
+            style_encoder_hidden_states = self.hubert_model(prompt_waveform).last_hidden_state
+        # --- END OF BLOCK ---
         # Decode
         decoder_outputs = self.decoder(
             input_ids=decoder_input_ids,
@@ -2860,6 +2900,7 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
             labels=labels,
             cache_position=cache_position,
             loss_reduction=loss_reduction,
+            style_encoder_hidden_states=style_encoder_hidden_states,
             **kwargs_decoder,
         )
 
