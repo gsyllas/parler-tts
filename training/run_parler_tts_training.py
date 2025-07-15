@@ -74,6 +74,56 @@ from training.eval import clap_similarity, wer, si_sdr
 import torchaudio
     
 logger = logging.getLogger(__name__)
+
+# In run_parler_tts_training.py
+
+def unified_preprocessing(
+    batch,
+    description_tokenizer,
+    prompt_tokenizer,
+    description_column_name,
+    prompt_column_name,
+    target_audio_column_name,
+):
+    # 1. Tokenize the text and description
+    batch["input_ids"] = description_tokenizer(batch[description_column_name].strip())["input_ids"]
+    batch["prompt_input_ids"] = prompt_tokenizer(batch[prompt_column_name].strip())["input_ids"]
+
+    # 2. Create the audio style prompt from the full audio
+    # The audio is in a dictionary format: {'array': ndarray, 'sampling_rate': int}
+    audio_input = batch[target_audio_column_name]
+    # Convert to a tensor, ensuring it's float32
+    full_waveform = torch.from_numpy(audio_input["array"]).float().unsqueeze(0)
+    original_sr = audio_input["sampling_rate"]
+    
+    # Ensure mono channel
+    if full_waveform.shape[0] > 1:
+        full_waveform = torch.mean(full_waveform, dim=0, keepdim=True)
+
+    # Create the 25% random audio prompt
+    prompt_length = int(0.25 * full_waveform.shape[-1])
+    if prompt_length > 0:
+        max_start = full_waveform.shape[-1] - prompt_length
+        start_idx = torch.randint(0, max_start + 1, (1,)).item()
+        prompt_chunk = full_waveform[..., start_idx : start_idx + prompt_length]
+    else:
+        prompt_chunk = full_waveform
+    
+    # Resample the prompt for HuBERT (16kHz)
+    HUBERT_SR = 16000
+    if original_sr != HUBERT_SR:
+        hubert_resampler = torchaudio.transforms.Resample(original_sr, HUBERT_SR)
+        prompt_waveform_resampled = hubert_resampler(prompt_chunk)
+    else:
+        prompt_waveform_resampled = prompt_chunk
+    
+    # Add the new prompt waveform to the batch
+    batch['prompt_waveform'] = prompt_waveform_resampled.squeeze(0).numpy()
+
+    # The original 'audio' column in the batch is automatically kept,
+    # so the next part of the script can use it for the loss calculation.
+    return batch
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -231,7 +281,14 @@ def main():
 
     if data_args.save_to_disk is not None:
         os.makedirs(data_args.save_to_disk, exist_ok=True)
-
+    sampling_rate = feature_extractor.sampling_rate
+    max_target_length = int(data_args.max_duration_in_seconds * sampling_rate)
+    min_target_length = int(data_args.min_duration_in_seconds * sampling_rate)
+    target_audio_column_name = data_args.target_audio_column_name
+    description_column_name = data_args.description_column_name
+    prompt_column_name = data_args.prompt_column_name
+    feature_extractor_input_name = feature_extractor.model_input_names[0]
+ 
     # assume that the dataset has been saved to `save_to_disk` if the latter is not empty
     dataset_was_precomputed = len(os.listdir(data_args.save_to_disk)) > 0
     if dataset_was_precomputed:
@@ -276,47 +333,31 @@ def main():
                     )
             
 
-            def prepare_audio_prompts(batch):
-                # The audio is in a dictionary format: {'array': ndarray, 'sampling_rate': int}
-                audio_input = batch[data_args.target_audio_column_name]
-                # Convert to a tensor for processing
-                full_waveform = torch.from_numpy(audio_input["array"]).unsqueeze(0)
-                original_sr = audio_input["sampling_rate"]
-                
-                # Ensure mono channel for consistency
-                if full_waveform.shape[0] > 1:
-                    full_waveform = torch.mean(full_waveform, dim=0, keepdim=True)
-
-                # Create the 25% random audio prompt
-                prompt_length = int(0.25 * full_waveform.shape[-1])
-                if prompt_length > 0:
-                    max_start = full_waveform.shape[-1] - prompt_length
-                    start_idx = torch.randint(0, max_start + 1, (1,)).item()
-                    prompt_chunk = full_waveform[..., start_idx : start_idx + prompt_length]
-                else:
-                    # Handle very short audio clips
-                    prompt_chunk = full_waveform
-                
-                # HuBERT expects 16kHz, so we must resample the prompt
-                HUBERT_SR = 16000
-                if original_sr != HUBERT_SR:
-                    hubert_resampler = torchaudio.transforms.Resample(original_sr, HUBERT_SR)
-                    prompt_waveform_resampled = hubert_resampler(prompt_chunk)
-                else:
-                    prompt_waveform_resampled = prompt_chunk
-                
-                # Add the new prompt waveform to the batch as a numpy array to match dataset format
-                batch['prompt_waveform'] = prompt_waveform_resampled.squeeze(0).numpy()
-                return batch
-
             # This is our new block of code to create the audio prompts
-            with accelerator.local_main_process_first():
-                logger.info("Preparing audio style prompts...")
-                raw_datasets = raw_datasets.map(
-                    prepare_audio_prompts,
-                    num_proc=data_args.preprocessing_num_workers,
-                    desc="Preparing audio prompts",
-                )
+# In main() of run_parler_tts_training.py
+
+# --- THE CORRECTED AND FINAL .map() block ---
+        with accelerator.local_main_process_first():
+            # Define the original text columns that we will replace with tokenized versions
+            text_columns_to_remove = [description_column_name, prompt_column_name]
+
+            # Define the arguments your function needs in a dictionary
+            fn_kwargs = {
+                "description_tokenizer": description_tokenizer,
+                "prompt_tokenizer": prompt_tokenizer,
+                "description_column_name": description_column_name,
+                "prompt_column_name": prompt_column_name,
+                "target_audio_column_name": target_audio_column_name,
+            }
+
+            logger.info("Tokenizing text and creating audio prompts...")
+            # This single map call does everything we need for the initial preparation
+            raw_datasets = raw_datasets.map(
+                unified_preprocessing,
+                fn_kwargs=fn_kwargs,
+                remove_columns=text_columns_to_remove,
+                desc="preprocess datasets",
+            )
 
             if data_args.max_train_samples is not None:
                 raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
@@ -396,13 +437,6 @@ def main():
     # via the `feature_extractor`
 
     # derive max & min input length for sample rate & max duration
-    sampling_rate = feature_extractor.sampling_rate
-    max_target_length = int(data_args.max_duration_in_seconds * sampling_rate)
-    min_target_length = int(data_args.min_duration_in_seconds * sampling_rate)
-    target_audio_column_name = data_args.target_audio_column_name
-    description_column_name = data_args.description_column_name
-    prompt_column_name = data_args.prompt_column_name
-    feature_extractor_input_name = feature_extractor.model_input_names[0]
     audio_encoder_pad_token_id = config.decoder.pad_token_id
     audio_encoder_eos_token_id = config.decoder.eos_token_id
     audio_encoder_bos_token_id = model.generation_config.decoder_start_token_id
@@ -425,35 +459,35 @@ def main():
 
     if not dataset_was_precomputed:
         # Filter on text length
-        if description_column_name is not None and data_args.max_text_length is not None:
-            with accelerator.local_main_process_first():
-                # filter description that is shorter than max_text_length
-                raw_datasets = raw_datasets.filter(
-                    lambda x: len(x) < data_args.max_text_length,
-                    num_proc=num_workers,
-                    input_columns=[description_column_name],
-                )
+        # if description_column_name is not None and data_args.max_text_length is not None:
+        #     with accelerator.local_main_process_first():
+        #         # filter description that is shorter than max_text_length
+        #         raw_datasets = raw_datasets.filter(
+        #             lambda x: len(x) < data_args.max_text_length,
+        #             num_proc=num_workers,
+        #             input_columns=[description_column_name],
+        #         )
 
         # Preprocessing the dataset.
         # We need to tokenize the texts.
-        def pass_through_processors(description, prompt):
-            batch = {}
+        # def pass_through_processors(description, prompt):
+        #     batch = {}
 
-            batch["input_ids"] = description_tokenizer(description.strip())["input_ids"]
-            batch["prompt_input_ids"] = prompt_tokenizer(prompt.strip())["input_ids"]
+        #     batch["input_ids"] = description_tokenizer(description.strip())["input_ids"]
+        #     batch["prompt_input_ids"] = prompt_tokenizer(prompt.strip())["input_ids"]
 
-            return batch
+        #     return batch
 
-        with accelerator.local_main_process_first():
-            # this is a trick to avoid to rewrite the entire audio column which takes ages
-            vectorized_datasets = raw_datasets.map(
-                pass_through_processors,
-                remove_columns=next(iter(raw_datasets.values())).column_names,
-                input_columns=[description_column_name, prompt_column_name],
-                num_proc=num_workers,
-                desc="preprocess datasets",
-            )
-
+        # with accelerator.local_main_process_first():
+        #     # this is a trick to avoid to rewrite the entire audio column which takes ages
+        #     vectorized_datasets = raw_datasets.map(
+        #         pass_through_processors,
+        #         remove_columns=next(iter(raw_datasets.values())).column_names,
+        #         input_columns=[description_column_name, prompt_column_name],
+        #         num_proc=num_workers,
+        #         desc="preprocess datasets",
+        #     )
+        vectorized_datasets = raw_datasets
         # We use Accelerate to perform distributed inference
         # T5 doesn't support fp16
         autocast_kwargs = AutocastKwargs(enabled=(mixed_precision != "fp16"))
@@ -498,7 +532,7 @@ def main():
             output = {}
             output["len_audio"] = len_audio
             # (1, bsz, codebooks, seq_len) -> (bsz, seq_len, codebooks)
-            output["labels"] = labels.squeeze(0).transpose(1, 2)
+            output["labels"] = labels.transpose(1, 2)
 
             # if `pad_to_max_length`, the maximum corresponding audio length of the current batch is max_duration*sampling_rate
             max_length = len_audio.max() if padding != "max_length" else max_target_length
