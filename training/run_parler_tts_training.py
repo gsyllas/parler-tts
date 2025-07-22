@@ -1372,6 +1372,20 @@ def main():
                     if cur_step == total_train_steps:
                         # un-wrap student model for save
                         unwrapped_model = accelerator.unwrap_model(model)
+                                                # --- START OF MODIFICATION FOR LORA SAVING ---
+                        if training_args.use_lora:
+                            logger.info("Merging LoRA adapters back into the base model for final save.")
+                            
+                            # The model returned by get_peft_model is a PeftModel, which we need to handle.
+                            # The standard library way would be `unwrapped_model = unwrapped_model.merge_and_unload()`
+                            # But since you are using a custom utility, we will use that.
+                            # First, we need to import your custom function.
+                            from peft_utils import replace_lora_with_linear
+                            
+                            # Replace LoRA layers with merged standard Linear layers
+                            unwrapped_model = replace_lora_with_linear(unwrapped_model)
+                            logger.info("LoRA adapters merged successfully.")
+                        # --- END OF MODIFICATION FOR LORA SAVING ---
                         unwrapped_model.save_pretrained(training_args.output_dir)
 
                     if training_args.push_to_hub:
