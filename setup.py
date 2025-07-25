@@ -19,7 +19,7 @@ import setuptools
 
 _deps = [
     "transformers>=4.46.1,<=4.46.1",
-    "torch",
+    "torch==2.6.0",
     "sentencepiece",
     "descript-audio-codec",
     "descript-audiotools @ git+https://github.com/descriptinc/audiotools", # temporary fix as long as 0.7.4 is not published
