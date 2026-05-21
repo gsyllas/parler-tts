@@ -19,8 +19,13 @@ non-zero means at least one concern is confirmed and a fix is needed.
 from __future__ import annotations
 
 import os
+import sys
 import traceback
 from pathlib import Path
+
+# Allow `import training.*` when run as `python leonardo/login/04_verify_loader.py`
+# (Python puts this file's dir on sys.path, not the repo root).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import datasets
 from datasets import load_dataset, load_from_disk
@@ -115,15 +120,23 @@ def check_load_dataset_on_save_to_disk() -> bool:
         print(f"  load_from_disk FAILED ({type(e).__name__}: {e}); unexpected.")
         return False
 
+    # Flag the save_to_disk markers up front so we know what we're poking at.
+    markers = [m for m in ("dataset_dict.json", "state.json", "dataset_info.json")
+               if (Path(target) / m).exists() or list(Path(target).glob(f"*/{m}"))]
+    if markers:
+        print(f"  note: dir carries save_to_disk markers {markers} (written by save_to_disk).")
+
     # The real question: does load_dataset() read it the way training does?
+    # Use streaming so we resolve the dir + read ONE row instead of all 36k.
     try:
-        got = load_dataset(target, split="train")
-        print(f"  load_dataset(split='train') OK -> {len(got)} rows, cols={got.column_names[:6]}")
-        print("  => loader is compatible as-is for this dir.")
+        stream = load_dataset(target, split="train", streaming=True)
+        first = next(iter(stream))
+        print(f"  load_dataset(streaming) OK -> first-row cols={list(first)[:8]}")
+        print("  => loader can read this dir; check the cols above look like real data.")
         return True
     except Exception as e:  # noqa: BLE001
         print(f"  load_dataset FAILED: {type(e).__name__}: {e}")
-        print("  (this is the expected outcome if save_to_disk dirs are incompatible)")
+        print("  (expected if save_to_disk dirs are incompatible with load_dataset)")
         traceback.print_exc()
         return False
 
