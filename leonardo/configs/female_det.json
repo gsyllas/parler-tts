@@ -52,5 +52,7 @@
     "train_dataset_name": "/leonardo_work/EUHPC_D29_081/gsyllas0/data/tts/dataspeech_out/female/05_merged_det",
     "train_split_name": "train",
     "eval_dataset_name": "/leonardo_work/EUHPC_D29_081/gsyllas0/data/tts/dataspeech_out/female/05_merged_det",
-    "eval_split_name": "eval"
+    "eval_split_name": "eval",
+    "compute_clap_similarity_metric": false,
+    "compute_noise_level_metric": false
 }

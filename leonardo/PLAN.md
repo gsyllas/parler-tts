@@ -77,19 +77,37 @@ Verified on a Leonardo login node with `load_from_disk`:
 ### How the training script joins audio + descriptions
 
 `training/run_parler_tts_training.py` → `training/data.py::load_multiple_datasets`
-is *designed* to merge a dataset-with-audio (`train_dataset_name`) and a
-dataset-with-descriptions (`train_metadata_dataset_name`) — exactly the released
-LibriTTS recipe pattern:
+merges a dataset-with-audio (`train_dataset_name`) and a
+dataset-with-descriptions (`train_metadata_dataset_name`) — the released LibriTTS
+recipe pattern:
 
-- `data.py:271` → `concatenate_datasets([dataset, metadata_dataset], axis=1)`
+- `concatenate_datasets([dataset, metadata_dataset], axis=1)`
 - If `id_column_name` is set, it renames the metadata id to `metadata_<id>`,
   drops overlapping columns, concatenates, then asserts `id == metadata_id`
-  row-by-row (`data.py:277-288`).
+  row-by-row.
 - If `id_column_name` is unset, it just drops overlapping columns and
   concatenates **by row order**.
 
 Since there is no `id` column, we rely on row-order alignment (guaranteed by the
-equal split sizes and in-place maps). No `data.py` patch is required.
+equal split sizes and in-place maps).
+
+**Loader patch (verified necessary, 2026-05-21).** The original loader assumed
+HF Hub recipes and used `load_dataset()` for both sides, always with a config
+name and metadata. `leonardo/login/04_verify_loader.py` confirmed three blockers
+for our offline `save_to_disk` dirs:
+
+1. omitting `*_dataset_config_name` → `None.split("+")` `AttributeError`;
+2. omitting metadata (female/male merged dirs) → `None[i]` `TypeError`;
+3. `load_dataset()` *silently misreads* a `save_to_disk` dir — it returns rows
+   with positional columns (`'0','1',…`) instead of the real schema, which would
+   train on garbage rather than crash.
+
+So `training/data.py` **was patched** (minimal, backward-compatible): a
+`_load_split()` helper routes local `save_to_disk` dirs through
+`load_from_disk()` (Hub ids still use `load_dataset()`), and
+`convert_dataset_str_to_list()` now tolerates `None` config / `None` metadata.
+Existing Hub recipes are unaffected. Re-run `04_verify_loader.py` after pulling
+the patch — all four checks should report OK.
 
 ---
 

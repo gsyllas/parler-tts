@@ -1,4 +1,5 @@
 import logging
+import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Union
 
@@ -6,7 +7,15 @@ import datasets
 import numpy as np
 import torch
 from accelerate import Accelerator
-from datasets import Dataset, IterableDataset, concatenate_datasets, interleave_datasets, load_dataset
+from datasets import (
+    Dataset,
+    DatasetDict,
+    IterableDataset,
+    concatenate_datasets,
+    interleave_datasets,
+    load_dataset,
+    load_from_disk,
+)
 from tqdm import tqdm
 from transformers import AutoFeatureExtractor, AutoTokenizer
 
@@ -124,10 +133,18 @@ def convert_dataset_str_to_list(
 ):
     if isinstance(dataset_names, str):
         dataset_names = dataset_names.split("+")
-        dataset_config_names = dataset_config_names.split("+")
+        # config/metadata may legitimately be unset (e.g. local save_to_disk dirs
+        # that need no builder config, or datasets already carrying descriptions).
+        dataset_config_names = dataset_config_names.split("+") if dataset_config_names is not None else None
         splits = splits.split("+") if splits is not None else None
         dataset_samples = dataset_samples.split("+") if dataset_samples is not None else None
         metadata_dataset_names = metadata_dataset_names.split("+") if metadata_dataset_names is not None else None
+
+    # Default config / metadata to one-per-dataset Nones so the checks + indexing below hold.
+    if dataset_config_names is None:
+        dataset_config_names = [None] * len(dataset_names)
+    if metadata_dataset_names is None:
+        metadata_dataset_names = [None] * len(dataset_names)
 
     # basic checks to ensure we've got the right number of datasets/configs/splits/columns/probs
     if len(dataset_names) != len(dataset_config_names):
@@ -172,6 +189,38 @@ def convert_dataset_str_to_list(
     return dataset_names_dict
 
 
+def _is_saved_to_disk(path) -> bool:
+    """True if `path` is a local directory written by `Dataset(Dict).save_to_disk`."""
+    if not isinstance(path, str) or not os.path.isdir(path):
+        return False
+    return (
+        os.path.exists(os.path.join(path, "dataset_dict.json"))  # DatasetDict
+        or os.path.exists(os.path.join(path, "state.json"))      # bare Dataset
+    )
+
+
+def _load_split(name, config, split, streaming, **kwargs):
+    """Load one dataset split.
+
+    Local `save_to_disk` directories are read with `load_from_disk` (the only
+    API that understands that on-disk format — `load_dataset` silently misreads
+    the raw Arrow shards). Everything else (Hub ids, loading scripts, data files)
+    keeps going through `load_dataset` unchanged, so existing recipes are
+    unaffected.
+    """
+    if _is_saved_to_disk(name):
+        loaded = load_from_disk(name)
+        if isinstance(loaded, DatasetDict):
+            if split not in loaded:
+                raise ValueError(
+                    f"split {split!r} not found in save_to_disk dataset {name!r}; "
+                    f"available splits: {list(loaded)}"
+                )
+            return loaded[split]
+        return loaded
+    return load_dataset(name, config, split=split, streaming=streaming, **kwargs)
+
+
 def load_multiple_datasets(
     accelerator: Accelerator,
     dataset_names: Union[List, str],
@@ -205,11 +254,11 @@ def load_multiple_datasets(
     # iterate over the datasets we want to interleave
     for dataset_dict in tqdm(dataset_names_dict, desc="Combining datasets..."):
         with accelerator.local_main_process_first():
-            dataset = load_dataset(
+            dataset = _load_split(
                 dataset_dict["name"],
                 dataset_dict["config"],
-                split=dataset_dict["split"],
-                streaming=streaming,
+                dataset_dict["split"],
+                streaming,
                 **kwargs,
             )
             dataset_features = dataset.features.keys()
@@ -223,11 +272,11 @@ def load_multiple_datasets(
                 logger.info(
                     f'Merging {dataset_dict["name"]} - {dataset_dict["split"]} with {metadata_dataset_name} - {dataset_dict["split"]}'
                 )
-                metadata_dataset = load_dataset(
+                metadata_dataset = _load_split(
                     metadata_dataset_name,
                     dataset_dict["config"],
-                    split=dataset_dict["split"],
-                    streaming=streaming,
+                    dataset_dict["split"],
+                    streaming,
                     **kwargs,
                 )
 

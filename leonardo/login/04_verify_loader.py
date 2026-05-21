@@ -52,6 +52,7 @@ def check_convert_none_config() -> bool:
     compatible with our configs (which omit train_dataset_config_name)."""
     hr("concern #1: None dataset_config_name")
     try:
+        print("  importing training.data (pulls torch+transformers; ~1-3 min cold on Leonardo FS)...", flush=True)
         from training.data import convert_dataset_str_to_list
     except Exception as e:  # noqa: BLE001
         print(f"  could not import training.data: {type(e).__name__}: {e}")
@@ -126,17 +127,58 @@ def check_load_dataset_on_save_to_disk() -> bool:
     if markers:
         print(f"  note: dir carries save_to_disk markers {markers} (written by save_to_disk).")
 
-    # The real question: does load_dataset() read it the way training does?
-    # Use streaming so we resolve the dir + read ONE row instead of all 36k.
+    # The stock loader uses load_dataset(); use streaming so we resolve the dir +
+    # read ONE row instead of all 36k. Crucially, check the *schema*, not just
+    # that a row came back: load_dataset misreads save_to_disk shards into
+    # positional columns ('0','1',...), which is a silent corruption, not success.
     try:
         stream = load_dataset(target, split="train", streaming=True)
         first = next(iter(stream))
-        print(f"  load_dataset(streaming) OK -> first-row cols={list(first)[:8]}")
-        print("  => loader can read this dir; check the cols above look like real data.")
+        cols = list(first)
+        positional = all(c.isdigit() for c in cols)
+        print(f"  load_dataset(streaming) returned cols={cols[:8]}")
+        if positional or "text_description" not in cols:
+            print("  => MISREAD: columns are positional/garbage, not the real schema.")
+            print("     load_dataset cannot read save_to_disk dirs -> loader patch required.")
+            return False
+        print("  => load_dataset read real columns; compatible as-is.")
         return True
     except Exception as e:  # noqa: BLE001
         print(f"  load_dataset FAILED: {type(e).__name__}: {e}")
         print("  (expected if save_to_disk dirs are incompatible with load_dataset)")
+        traceback.print_exc()
+        return False
+
+
+def check_patched_loader() -> bool:
+    """After the data.py patch: does training's own _load_split() read the dir
+    with the correct schema via load_from_disk?"""
+    hr("post-patch: training._load_split reads real schema")
+    target = first_existing(
+        f"{NAMED_OUT}/multi/04b_prompts_llm",
+        f"{NAMED_OUT}/multi/01_hf_dataset",
+        f"{OUT}/female/04a_prompts_deterministic",
+        f"{OUT}/female/01_hf_dataset",
+    )
+    if target is None:
+        print("  no dataset dir found; skipping.")
+        return False
+    try:
+        from training.data import _load_split
+    except Exception as e:  # noqa: BLE001
+        print(f"  could not import training.data._load_split: {type(e).__name__}: {e}")
+        print("  (older data.py without the patch?)")
+        return False
+    try:
+        ds = _load_split(target, None, "train", False)
+        cols = ds.column_names
+        ok = "text" in cols and ("text_description" in cols or "audio" in cols)
+        print(f"  _load_split OK -> {len(ds)} rows, cols={cols[:8]}")
+        if not ok:
+            print("  => unexpected schema; investigate.")
+        return ok
+    except Exception as e:  # noqa: BLE001
+        print(f"  _load_split FAILED: {type(e).__name__}: {e}")
         traceback.print_exc()
         return False
 
@@ -147,16 +189,19 @@ def main() -> int:
         "none_config_ok": check_convert_none_config(),
         "none_metadata_ok": check_convert_none_metadata(),
         "load_dataset_ok": check_load_dataset_on_save_to_disk(),
+        "patched_loader_ok": check_patched_loader(),
     }
     hr("summary")
     for k, v in results.items():
         print(f"  {k:18s}: {'OK' if v else 'NEEDS FIX'}")
-    all_ok = all(results.values())
-    if all_ok:
-        print("\nLoader is compatible with the dataspeech outputs as-is. No data.py patch needed.")
+
+    # With the data.py patch, the first three flip to OK (None config/metadata
+    # tolerated, save_to_disk routed to load_from_disk) and patched_loader_ok
+    # confirms the real schema loads.
+    if all(results.values()):
+        print("\nLoader is compatible with the dataspeech outputs. Ready to train.")
         return 0
-    print("\nAt least one concern confirmed -> a loader fix (or data re-export) is required.")
-    print("Share this output and I'll apply the targeted fix.")
+    print("\nAt least one check failed -> share this output for the next fix.")
     return 1
 
 
