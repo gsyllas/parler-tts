@@ -49,6 +49,16 @@ echo "[train] base ckpt  = $(base_ckpt_for "$EXP")"
 echo "[train] HF_HOME    = $HF_HOME"
 echo "[train] WANDB_MODE = ${WANDB_MODE:-online}"
 nvidia-smi -L || true
+python - <<'PY'
+import torch
+
+print(f"[train] torch      = {torch.__version__}")
+print(f"[train] cuda avail = {torch.cuda.is_available()}")
+if not torch.cuda.is_available():
+    raise SystemExit("[train] ERROR: PyTorch cannot see CUDA; refusing to train on CPU.")
+print(f"[train] cuda count = {torch.cuda.device_count()}")
+print(f"[train] cuda dev 0 = {torch.cuda.get_device_name(0)}")
+PY
 
 accelerate launch --num_processes=1 \
   training/run_parler_tts_training.py "$CONFIG"

@@ -49,20 +49,28 @@ fi
 
 conda activate "$CONDA_ENV_PREFIX"
 
-# ---- 3. pytorch (cu121 wheels) ---------------------------------------------
+# ---- 3. pytorch / torchcodec (cu121 wheels) --------------------------------
 # cu121 wheels are forward-compatible with the `module load cuda/12.2` runtime
 # used on Leonardo compute nodes. 2.5.1 is the highest cu121 wheel published.
 TORCH_VERSION="${TORCH_VERSION:-2.5.1}"
+TORCHCODEC_VERSION="${TORCHCODEC_VERSION:-0.1}"
 echo "[setup] installing torch/torchaudio $TORCH_VERSION (cu121 wheels)"
 pip install --upgrade pip
 pip install --index-url https://download.pytorch.org/whl/cu121 \
   "torch==$TORCH_VERSION" "torchaudio==$TORCH_VERSION"
+pip install --no-deps "torchcodec==$TORCHCODEC_VERSION"
 
 # ---- 4. parler-tts + training extras ---------------------------------------
 # Installs transformers==4.46.1, datasets[audio], accelerate, wandb, jiwer,
 # evaluate, descript-audio-codec (DAC), sentencepiece, protobuf.
 echo "[setup] pip install -e .[train]"
 pip install -e "$REPO_ROOT[train]"
+
+# Re-assert the Leonardo-compatible pins in case an unpinned dependency was
+# resolved against a newer CUDA/PyTorch stack.
+pip install --index-url https://download.pytorch.org/whl/cu121 \
+  "torch==$TORCH_VERSION" "torchaudio==$TORCH_VERSION"
+pip install --no-deps "torchcodec==$TORCHCODEC_VERSION"
 pip check || echo "[setup] pip check reported issues (often benign for the git audiotools pin)"
 
 # ---- 5. sanity import -------------------------------------------------------
