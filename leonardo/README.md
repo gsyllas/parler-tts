@@ -62,10 +62,13 @@ python leonardo/login/03_make_eval_splits.py   # female/male eval holdouts (mult
 python leonardo/login/04_verify_loader.py      # confirm the patched loader reads the dirs (all OK)
 
 # --- submit (login node) ---
-bash leonardo/slurm/submit_all.sh              # all six
-# or one / a subset:
-EXP=multi_llm sbatch --export=ALL,EXP=multi_llm leonardo/slurm/train.slurm
+bash leonardo/slurm/submit_all.sh              # all six (per-exp QOS/time auto-applied)
+# or a subset:
 bash leonardo/slurm/submit_all.sh female_det male_det
+# manual single job — note the multi runs need the long QOS + longer wall:
+EXP=multi_llm  sbatch --qos=boost_qos_lprod --time=72:00:00 \
+    --export=ALL,EXP=multi_llm leonardo/slurm/train.slurm
+EXP=female_llm sbatch --export=ALL,EXP=female_llm leonardo/slurm/train.slurm
 squeue -u $USER
 
 # --- after jobs (login node) ---
@@ -95,8 +98,10 @@ wandb sync leonardo/logs/wandb/offline-run-*   # push metrics + audio to wandb
 - Conservative batch for the 64 GB A100: `per_device_train_batch_size=8`,
   `gradient_accumulation_steps=4` (effective 32), `max_duration_in_seconds=30`.
   If a job OOMs, drop `max_duration_in_seconds` to 25 before touching batch size.
-- Starting epochs: multi ≈ 30 (from the multilingual base), female/male ≈ 15
-  (from the already-Greek bases). Tune from wandb.
+- Epochs: multi = 100 (from the multilingual base; needs the long-production
+  QOS `boost_qos_lprod`, ≤4 days, submitted with `--time=72:00:00`),
+  female/male = 30 (from the already-Greek bases, fit the normal 24h QOS).
+  Tune from wandb.
 - Eval metric: **WER only**, via `openai/whisper-large-v3` (Greek-capable; the
   default `distil-whisper/distil-large-v2` is English-only). CLAP
   (`compute_clap_similarity_metric`) and SQUIM SI-SDR (`compute_noise_level_metric`)

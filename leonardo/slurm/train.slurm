@@ -15,6 +15,15 @@
 #   EXP=multi_llm sbatch --export=ALL,EXP=multi_llm leonardo/slurm/train.slurm
 #
 # EXP is one of: multi_det multi_llm female_det female_llm male_det male_llm
+#
+# QOS / wall-time defaults below are the normal 24h QOS, sized for the
+# female/male runs (~30 epochs). The multi runs (~100 epochs) need longer:
+# submit them on the long-production QOS, which allows up to 4 days:
+#
+#   EXP=multi_llm sbatch --qos=boost_qos_lprod --time=72:00:00 \
+#       --export=ALL,EXP=multi_llm leonardo/slurm/train.slurm
+#
+# submit_all.sh applies these per-experiment flags automatically.
 set -euo pipefail
 module purge
 module load cuda/12.2
