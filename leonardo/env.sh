@@ -134,6 +134,17 @@ activate_conda_env() {
   # shellcheck disable=SC1090
   source "$conda_sh"
   conda activate "$CONDA_ENV_PREFIX"
+
+  # TorchCodec/datasets dlopen FFmpeg at runtime. On Leonardo batch nodes the
+  # dynamic linker can otherwise pick the system libstdc++ before conda's newer
+  # runtime, which breaks conda-forge FFmpeg with GLIBCXX_* errors.
+  local conda_lib="${CONDA_PREFIX:-$CONDA_ENV_PREFIX}/lib"
+  if [ -d "$conda_lib" ]; then
+    case ":${LD_LIBRARY_PATH:-}:" in
+      *":$conda_lib:"*) ;;
+      *) export LD_LIBRARY_PATH="$conda_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+    esac
+  fi
 }
 
 # Force offline mode for compute nodes (no internet).
