@@ -41,7 +41,7 @@ if [ ! -d "$CONDA_ENV_PREFIX" ] || [ ! -x "$CONDA_ENV_PREFIX/bin/python" ]; then
   "$MINIFORGE_DIR/bin/conda" create -y -p "$CONDA_ENV_PREFIX" \
     --override-channels -c conda-forge \
     python=3.10 \
-    libsndfile sox ffmpeg \
+    libsndfile sox "ffmpeg>=4,<8" \
     pip git
 else
   echo "[setup] env already exists at $CONDA_ENV_PREFIX (reusing)"
@@ -49,7 +49,14 @@ fi
 
 conda activate "$CONDA_ENV_PREFIX"
 
-# ---- 3. pytorch / torchcodec (cu121 wheels) --------------------------------
+# ---- 3. FFmpeg + pytorch / torchcodec ---------------------------------------
+# TorchCodec 0.1 is the compatible release for torch 2.5 and looks for FFmpeg
+# 4-7 shared libraries. Keep this explicit so conda-forge doesn't upgrade the
+# existing env to FFmpeg 8, whose libavutil SONAME is too new for torchcodec 0.1.
+"$MINIFORGE_DIR/bin/conda" install -y -p "$CONDA_ENV_PREFIX" \
+  --override-channels -c conda-forge \
+  "ffmpeg>=4,<8" libsndfile sox
+
 # cu121 wheels are forward-compatible with the `module load cuda/12.2` runtime
 # used on Leonardo compute nodes. 2.5.1 is the highest cu121 wheel published.
 TORCH_VERSION="${TORCH_VERSION:-2.5.1}"
@@ -61,10 +68,11 @@ pip install --index-url https://download.pytorch.org/whl/cu121 \
 pip install --no-deps "torchcodec==$TORCHCODEC_VERSION"
 
 # ---- 4. parler-tts + training extras ---------------------------------------
-# Installs transformers==4.46.1, datasets[audio], accelerate, wandb, jiwer,
+# Installs transformers==4.46.1, datasets[audio]<4, accelerate, wandb, jiwer,
 # evaluate, descript-audio-codec (DAC), sentencepiece, protobuf.
 echo "[setup] pip install -e .[train]"
 pip install -e "$REPO_ROOT[train]"
+pip install "datasets[audio]>=2.14.5,<4.0.0"
 
 # Re-assert the Leonardo-compatible pins in case an unpinned dependency was
 # resolved against a newer CUDA/PyTorch stack.
