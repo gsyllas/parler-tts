@@ -60,6 +60,15 @@ print(f"[train] cuda count = {torch.cuda.device_count()}")
 print(f"[train] cuda dev 0 = {torch.cuda.get_device_name(0)}")
 PY
 
+# DAC audio-encoding builds large, variable-size conv activations; the longest
+# clips in a split produce the biggest ones. With the default caching allocator
+# a late long-clip batch can fail to fit in *fragmented* free memory even when
+# total free is plenty (e.g. 30 GiB live + 28 GiB reserved-but-stranded on a
+# 64 GiB A100). expandable_segments lets the allocator grow/reuse segments and
+# avoids that fragmentation OOM, without changing the batch size (so codec
+# checkpoints stay step-aligned for resume).
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 accelerate launch --num_processes=1 \
   training/run_parler_tts_training.py "$CONFIG"
 
