@@ -79,7 +79,11 @@ def wer(
     si_sdr_measures,
 ):
     metric = evaluate.load("wer")
-    asr_pipeline = pipeline(model=asr_model_name_or_path, device=device, chunk_length_s=25.0)
+    # Pass the task explicitly: on offline compute nodes (HF_HUB_OFFLINE=1) the
+    # pipeline cannot reach the Hub to auto-infer it. The ASR model is Whisper.
+    asr_pipeline = pipeline(
+        "automatic-speech-recognition", model=asr_model_name_or_path, device=device, chunk_length_s=25.0
+    )
 
     return_language = None
     if isinstance(asr_pipeline.model, WhisperForConditionalGeneration):
