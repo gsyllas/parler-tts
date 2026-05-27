@@ -79,9 +79,12 @@ export BASE_MULTILINGUAL="${BASE_MULTILINGUAL:-parler-tts/parler-tts-mini-multil
 export BASE_GREEK_DET="${BASE_GREEK_DET:-gsyllas/parler-tts-mini-multilingual-to-greek-v1.1_deterministic_60_epochs}"
 export BASE_GREEK_LLM="${BASE_GREEK_LLM:-gsyllas/parler-tts-mini-multilingual-to-greek-v1.1_52_epochs_speakers}"
 
-# Shared tokenizers / feature extractor (confirmed for v1.1).
+# Shared tokenizers / feature extractor.
+# The prompt/description tokenizer MUST be the multilingual base's own tokenizer:
+# google/flan-t5-large cannot encode Greek (every Greek word -> <unk>), which
+# silently empties the spoken transcript for both training and WER eval.
 export FEATURE_EXTRACTOR="${FEATURE_EXTRACTOR:-parler-tts/dac_44khZ_8kbps}"
-export TEXT_TOKENIZER="${TEXT_TOKENIZER:-google/flan-t5-large}"
+export TEXT_TOKENIZER="${TEXT_TOKENIZER:-parler-tts/parler-tts-mini-multilingual-v1.1}"
 # Greek WER ASR model (distil-large-v2 is English-only).
 export ASR_MODEL="${ASR_MODEL:-openai/whisper-large-v3}"
 export CLAP_MODEL="${CLAP_MODEL:-laion/larger_clap_music_and_speech}"
