@@ -487,6 +487,11 @@ def main():
             output = {"labels": labels[:, 1:]}
             return output
 
+        # `generate_labels` is only bound inside the per-split encode loop below.
+        # When the codec cache (`temporary_save_to_disk`) is already complete the
+        # loop is skipped, so initialize it here to keep the post-loop
+        # `del generate_labels` from raising UnboundLocalError.
+        generate_labels = None
         for split in vectorized_datasets:
             data_loader = DataLoader(
                 raw_datasets[split],
