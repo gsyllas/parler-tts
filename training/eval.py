@@ -107,9 +107,12 @@ def wer(
     normalized_references = []
 
     for pred, ref in zip(transcriptions, prompts):
-        norm_ref = normalizer(ref)
+        # Strip so a reference that normalizes to whitespace-only (e.g. it was
+        # empty or punctuation) is excluded: it has zero words, and feeding it
+        # to the WER metric makes `total` 0 -> ZeroDivisionError.
+        norm_ref = normalizer(ref).strip()
         if len(norm_ref) > 0:
-            norm_pred = normalizer(pred["text"])
+            norm_pred = normalizer(pred["text"]).strip()
             normalized_predictions.append(norm_pred)
             normalized_references.append(norm_ref)
 
