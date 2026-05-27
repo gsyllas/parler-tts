@@ -402,6 +402,7 @@ def main():
                 remove_columns=next(iter(raw_datasets.values())).column_names,
                 input_columns=[description_column_name, prompt_column_name],
                 num_proc=num_workers,
+                load_from_cache_file=False,
                 desc="preprocess datasets",
             )
 

@@ -287,7 +287,8 @@ Shared finetuning hyper-parameters (all six configs):
 | field | value | rationale |
 |-------|-------|-----------|
 | `feature_extractor_name` | `parler-tts/dac_44khZ_8kbps` | matches v1.1 |
-| `description_tokenizer_name` / `prompt_tokenizer_name` | `google/flan-t5-large` | matches v1.1 |
+| `description_tokenizer_name` | `google/flan-t5-large` | matches the frozen flan-T5 text encoder (`vocab_size=32128`) |
+| `prompt_tokenizer_name` | `parler-tts/parler-tts-mini-multilingual-v1.1` | matches the prompt embedding table (`vocab_size=90714`) and preserves Greek transcripts |
 | `target_audio_column_name` | `audio` | |
 | `prompt_column_name` | `text` | transcript |
 | `description_column_name` | `text_description` | dataspeech output |

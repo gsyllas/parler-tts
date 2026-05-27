@@ -6,7 +6,7 @@
         "wandb"
     ],
     "feature_extractor_name": "parler-tts/dac_44khZ_8kbps",
-    "description_tokenizer_name": "parler-tts/parler-tts-mini-multilingual-v1.1",
+    "description_tokenizer_name": "google/flan-t5-large",
     "prompt_tokenizer_name": "parler-tts/parler-tts-mini-multilingual-v1.1",
     "overwrite_output_dir": false,
     "output_dir": "/leonardo_work/EUHPC_D29_081/gsyllas0/parler-tts/leonardo/runs/female_det/output",
