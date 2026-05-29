@@ -42,6 +42,12 @@ CASES = [
     ("female_llm",  f"{OUT}/female/01_hf_dataset",       f"{OUT}/female/04b_prompts_llm"),
     ("male_det",    f"{OUT}/male/01_hf_dataset",         f"{OUT}/male/04a_prompts_deterministic"),
     ("male_llm",    f"{OUT}/male/01_hf_dataset",         f"{OUT}/male/04b_prompts_llm"),
+    ("multi_v2_det",       f"{NAMED_OUT}/multi_v2/01_hf_dataset",       f"{NAMED_OUT}/multi_v2/04a_prompts_deterministic"),
+    ("multi_v2_llm",       f"{NAMED_OUT}/multi_v2/01_hf_dataset",       f"{NAMED_OUT}/multi_v2/04b_prompts_llm"),
+    ("greek_female_det",   f"{OUT}/greek_female_tts/01_hf_dataset",     f"{OUT}/greek_female_tts/04a_prompts_deterministic"),
+    ("greek_female_llm",   f"{OUT}/greek_female_tts/01_hf_dataset",     f"{OUT}/greek_female_tts/04b_prompts_llm"),
+    ("greek_male_det",     f"{OUT}/greek_male_tts/01_hf_dataset",       f"{OUT}/greek_male_tts/04a_prompts_deterministic"),
+    ("greek_male_llm",     f"{OUT}/greek_male_tts/01_hf_dataset",       f"{OUT}/greek_male_tts/04b_prompts_llm"),
 ]
 
 

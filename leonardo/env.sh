@@ -94,16 +94,17 @@ export ASR_MODEL="${ASR_MODEL:-openai/whisper-large-v3}"
 export CLAP_MODEL="${CLAP_MODEL:-laion/larger_clap_music_and_speech}"
 
 # ---- experiment ids -------------------------------------------------------
-# The six finetuning experiments. Each maps to a config JSON + base checkpoint.
+# The original six finetuning experiments. Each maps to a config JSON + base checkpoint.
 export EXPERIMENTS="${EXPERIMENTS:-multi_det multi_llm female_det female_llm male_det male_llm}"
+export EXTRA_EXPERIMENTS="${EXTRA_EXPERIMENTS:-multi_v2_det multi_v2_llm greek_female_det greek_female_llm greek_male_det greek_male_llm}"
 
 # Resolve the base checkpoint for an experiment id. Pass id as $1.
 base_ckpt_for() {
   case "${1:-}" in
-    multi_det|multi_llm)   echo "$BASE_MULTILINGUAL" ;;
-    female_det|male_det)   echo "$BASE_GREEK_DET" ;;
-    female_llm|male_llm)   echo "$BASE_GREEK_LLM" ;;
-    *) echo "[env.sh] unknown EXP='${1:-}'; expected one of: $EXPERIMENTS" >&2; return 1 ;;
+    multi_det|multi_llm|multi_v2_det|multi_v2_llm) echo "$BASE_MULTILINGUAL" ;;
+    female_det|male_det|greek_female_det|greek_male_det) echo "$BASE_GREEK_DET" ;;
+    female_llm|male_llm|greek_female_llm|greek_male_llm) echo "$BASE_GREEK_LLM" ;;
+    *) echo "[env.sh] unknown EXP='${1:-}'; expected one of: $EXPERIMENTS $EXTRA_EXPERIMENTS" >&2; return 1 ;;
   esac
 }
 

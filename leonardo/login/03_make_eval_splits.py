@@ -41,6 +41,10 @@ CASES = {
     "female_llm": ("female", "04b_prompts_llm", "llm"),
     "male_det":   ("male",   "04a_prompts_deterministic", "det"),
     "male_llm":   ("male",   "04b_prompts_llm", "llm"),
+    "greek_female_det": ("greek_female_tts", "04a_prompts_deterministic", "det"),
+    "greek_female_llm": ("greek_female_tts", "04b_prompts_llm", "llm"),
+    "greek_male_det":   ("greek_male_tts",   "04a_prompts_deterministic", "det"),
+    "greek_male_llm":   ("greek_male_tts",   "04b_prompts_llm", "llm"),
 }
 
 KEY = "filename"  # unique key shared by audio + metadata for female/male

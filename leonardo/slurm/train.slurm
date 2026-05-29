@@ -14,7 +14,8 @@
 #
 #   EXP=multi_llm sbatch --export=ALL,EXP=multi_llm leonardo/slurm/train.slurm
 #
-# EXP is one of: multi_det multi_llm female_det female_llm male_det male_llm
+# EXP is a config id under leonardo/configs/, e.g.
+# multi_det, female_llm, multi_v2_det, greek_female_llm, greek_male_det.
 #
 # QOS / wall-time defaults below are the normal 24h QOS, sized for the
 # female/male runs (~30 epochs). The multi runs (~100 epochs) need longer:
@@ -32,7 +33,7 @@ cd "$SLURM_SUBMIT_DIR"
 # shellcheck disable=SC1091
 source leonardo/env.sh
 
-: "${EXP:?set EXP=multi_det|multi_llm|female_det|female_llm|male_det|male_llm}"
+: "${EXP:?set EXP to a config id under leonardo/configs/}"
 CONFIG="$(config_for "$EXP")"
 if [ ! -f "$CONFIG" ]; then
   echo "[train] missing config $CONFIG" >&2
