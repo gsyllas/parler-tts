@@ -21,10 +21,14 @@ export SLURM_PARTITION="${SLURM_PARTITION:-boost_usr_prod}"
 # REPO_ROOT is the absolute path to the cloned parler-tts repo on /leonardo_work.
 # It must NOT be in $HOME (no quota). Default: parent dir of this file's parent
 # (i.e. the repo root, since this file lives in <repo>/leonardo/env.sh).
-if [ -z "${REPO_ROOT:-}" ]; then
-  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Ignore inherited REPO_ROOT values from sibling projects such as dataspeech.
+_parler_script_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -n "${REPO_ROOT:-}" ] && [ "$REPO_ROOT" != "$_parler_script_repo_root" ]; then
+  echo "[env.sh] ignoring inherited REPO_ROOT=$REPO_ROOT; using $_parler_script_repo_root" >&2
 fi
+REPO_ROOT="$_parler_script_repo_root"
 export REPO_ROOT
+unset _parler_script_repo_root
 
 # Conda env lives INSIDE the repo (per user requirement: no $HOME space).
 # Ignore inherited CONDA_ENV_PREFIX values from sibling projects; otherwise a
