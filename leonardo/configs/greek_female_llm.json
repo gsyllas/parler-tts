@@ -50,10 +50,12 @@
     "seed": 456,
     "preprocessing_num_workers": 8,
     "dataloader_num_workers": 8,
-    "train_dataset_name": "/leonardo_work/EUHPC_D29_081/gsyllas0/data/tts/dataspeech_out/greek_female_tts/05_merged_llm",
+    "train_dataset_name": "/leonardo_work/EUHPC_D29_081/gsyllas0/data/tts/dataspeech_out/greek_female_tts/01_hf_dataset",
+    "train_metadata_dataset_name": "/leonardo_work/EUHPC_D29_081/gsyllas0/data/tts/dataspeech_out/greek_female_tts/04b_prompts_llm",
     "train_split_name": "train",
-    "eval_dataset_name": "/leonardo_work/EUHPC_D29_081/gsyllas0/data/tts/dataspeech_out/greek_female_tts/05_merged_llm",
-    "eval_split_name": "eval",
+    "eval_dataset_name": "/leonardo_work/EUHPC_D29_081/gsyllas0/data/tts/dataspeech_out/greek_female_tts/01_hf_dataset",
+    "eval_metadata_dataset_name": "/leonardo_work/EUHPC_D29_081/gsyllas0/data/tts/dataspeech_out/greek_female_tts/04b_prompts_llm",
+    "eval_split_name": "train",
     "compute_clap_similarity_metric": false,
     "compute_noise_level_metric": false
 }
