@@ -55,7 +55,7 @@
     "train_split_name": "train",
     "eval_dataset_name": "/leonardo_work/EUHPC_D29_081/gsyllas0/data/tts/dataspeech_out_named/multi_v2/01_hf_dataset",
     "eval_metadata_dataset_name": "/leonardo_work/EUHPC_D29_081/gsyllas0/data/tts/dataspeech_out_named/multi_v2/04a_prompts_deterministic",
-    "eval_split_name": "eval",
+    "eval_split_name": "train",
     "compute_clap_similarity_metric": false,
     "compute_noise_level_metric": false
 }

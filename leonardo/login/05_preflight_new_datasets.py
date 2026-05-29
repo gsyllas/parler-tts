@@ -100,9 +100,12 @@ def check_config(config_name: str, samples: int, seed: int) -> list[str]:
     print(f"\n=== {label} ===")
     train_path = cfg["train_dataset_name"]
     train_split = cfg.get("train_split_name", "train")
+    eval_path = cfg.get("eval_dataset_name", train_path)
+    eval_split = cfg.get("eval_split_name", train_split)
     prompt_col = cfg.get("prompt_column_name", "text")
     desc_col = cfg.get("description_column_name", "text_description")
     meta_path = cfg.get("train_metadata_dataset_name")
+    eval_meta_path = cfg.get("eval_metadata_dataset_name", meta_path)
 
     prompt_ds = _load_split(train_path, train_split)
     if meta_path:
@@ -111,11 +114,21 @@ def check_config(config_name: str, samples: int, seed: int) -> list[str]:
             problems.append(f"train length mismatch audio={len(prompt_ds)} metadata={len(desc_ds)}")
     else:
         desc_ds = prompt_ds
+    eval_ds = _load_split(eval_path, eval_split)
+    if eval_meta_path:
+        eval_desc_ds = _load_split(eval_meta_path, eval_split)
+        if len(eval_ds) != len(eval_desc_ds):
+            problems.append(f"eval length mismatch audio={len(eval_ds)} metadata={len(eval_desc_ds)}")
+    else:
+        eval_desc_ds = eval_ds
 
     print(f"config:       {path.relative_to(REPO_ROOT)}")
     print(f"train data:   {train_path} [{train_split}] rows={len(prompt_ds)}")
     if meta_path:
         print(f"metadata:     {meta_path} [{train_split}] rows={len(desc_ds)}")
+    print(f"eval data:    {eval_path} [{eval_split}] rows={len(eval_ds)}")
+    if eval_meta_path:
+        print(f"eval meta:    {eval_meta_path} [{eval_split}] rows={len(eval_desc_ds)}")
     print(f"columns:      prompt={prompt_col!r} description={desc_col!r}")
 
     prompt_indices, prompt_texts = _sample_column(prompt_ds, prompt_col, samples, rng)
