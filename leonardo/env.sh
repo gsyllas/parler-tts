@@ -27,7 +27,20 @@ fi
 export REPO_ROOT
 
 # Conda env lives INSIDE the repo (per user requirement: no $HOME space).
-export CONDA_ENV_PREFIX="${CONDA_ENV_PREFIX:-$REPO_ROOT/.conda/parler-tts}"
+# Ignore inherited CONDA_ENV_PREFIX values from sibling projects; otherwise a
+# shell that starts inside the dataspeech env will keep re-activating dataspeech.
+_parler_default_conda_env="$REPO_ROOT/.conda/parler-tts"
+if [ -n "${CONDA_ENV_PREFIX:-}" ] && [ "$CONDA_ENV_PREFIX" != "$_parler_default_conda_env" ]; then
+  case "$CONDA_ENV_PREFIX" in
+    "$REPO_ROOT"/*) ;;
+    *)
+      echo "[env.sh] ignoring inherited CONDA_ENV_PREFIX=$CONDA_ENV_PREFIX; using $_parler_default_conda_env" >&2
+      CONDA_ENV_PREFIX="$_parler_default_conda_env"
+      ;;
+  esac
+fi
+export CONDA_ENV_PREFIX="${CONDA_ENV_PREFIX:-$_parler_default_conda_env}"
+unset _parler_default_conda_env
 
 # All HF / torch caches live next to the repo on /leonardo_work. Some login-node
 # shells already export HF_HOME / TORCH_HOME from old projects; ignore those
