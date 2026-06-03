@@ -24,6 +24,7 @@ offline SLURM jobs.
 ```
 leonardo/
 ├── env.sh                      paths, cache redirection, conda + offline helpers, EXP resolver
+├── generate_eval_wavs.py       generate per-row eval WAVs from trained checkpoints
 ├── login/                      run on a LOGIN node (has internet)
 │   ├── 00_setup_conda_env.sh   build .conda/parler-tts; pip install -e .[train]
 │   ├── 01_cache_models.py      pre-fetch checkpoints + tokenizers + DAC + whisper + clap + wer
@@ -33,7 +34,8 @@ leonardo/
 ├── configs/                    one JSON per experiment (based on starting_point_v1.json)
 ├── slurm/
 │   ├── train.slurm             generic job: EXP=<id> sbatch …
-│   └── submit_all.sh           submit all six (or a named subset)
+│   ├── submit_all.sh           submit all six (or a named subset)
+│   └── generate_eval_wavs.slurm generate eval WAVs from trained checkpoints
 └── runs/<exp>/                 output checkpoints + DAC token buffers (created at runtime)
 ```
 
@@ -73,6 +75,12 @@ squeue -u $USER
 
 # --- after jobs (login node) ---
 wandb sync leonardo/logs/wandb/offline-run-*   # push metrics + audio to wandb
+
+# --- listening eval WAVs (GPU node) ---
+sbatch leonardo/slurm/generate_eval_wavs.slurm  # defaults to the v2 experiment set
+# subset / smoke test:
+EXPS="multi_v2_llm" GEN_ARGS="--limit 16 --overwrite-manifest" \
+    sbatch --export=ALL leonardo/slurm/generate_eval_wavs.slurm
 ```
 
 ## Dataset join strategy
@@ -113,4 +121,22 @@ wandb sync leonardo/logs/wandb/offline-run-*   # push metrics + audio to wandb
 - First run per experiment precomputes DAC audio tokens into
   `runs/<exp>/dataset_audio`; subsequent re-runs reuse that buffer. Budget for it
   in the 24 h wall-time (multi is largest).
+- `leonardo/generate_eval_wavs.py` defaults to `--source raw`: generation and
+  ground-truth are re-derived from the *same* raw dataset, so the `greedy/` /
+  `sample/` WAVs stay row-aligned with `ground_truth/` by construction. (The
+  cached `save_to_disk` split stores audio only as DAC tokens and keeps no row id
+  back to the source, so taking generation from cache while reading ground-truth
+  from raw — the old default — could silently mispair the two. Use
+  `GEN_ARGS="--source cache"` only if you need the exact training subset and
+  accept that pairing then relies on every filter replaying identically.)
+  It writes `ground_truth/`, `greedy/` (`do_sample=False`), and
+  `sample/` (`do_sample=True`) folders under `eval_wavs/<checkpoint>/`, always
+  passing both text attention masks. Each folder includes `transcriptions.tsv`
+  and `manifest.jsonl`. Use `GEN_ARGS="--modes greedy"` or
+  `GEN_ARGS="--modes sample"` for a single decoding mode.
+- Batch size defaults to `1` so the listening eval is faithful: a single row has
+  no padding, so the left-padded prompt / right-padded description interactions
+  (and the train-time encoder masking that plain `generate()` does not replicate)
+  cannot color the audio. Raise it with `GEN_ARGS="--batch-size N"` only to speed
+  up large sweeps where exact fidelity matters less.
 - No Hub push — checkpoints stay under `leonardo/runs/<exp>/output`.
