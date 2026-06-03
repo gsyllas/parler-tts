@@ -77,7 +77,10 @@ squeue -u $USER
 wandb sync leonardo/logs/wandb/offline-run-*   # push metrics + audio to wandb
 
 # --- listening eval WAVs (GPU node) ---
-sbatch leonardo/slurm/generate_eval_wavs.slurm  # defaults to the v2 experiment set
+# parallel: one job per model, each on its own GPU (preferred — ~1h/model):
+bash leonardo/slurm/submit_eval_wavs.sh          # all six v2; or pass a subset
+# serial: all models in a single 8h job (loops internally):
+sbatch leonardo/slurm/generate_eval_wavs.slurm   # defaults to the v2 experiment set
 # subset / smoke test:
 EXPS="multi_v2_llm" GEN_ARGS="--limit 16 --overwrite-manifest" \
     sbatch --export=ALL leonardo/slurm/generate_eval_wavs.slurm
