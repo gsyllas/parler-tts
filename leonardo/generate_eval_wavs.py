@@ -151,12 +151,21 @@ def _load_raw_eval_dataset(cfg: dict[str, Any]) -> Dataset:
         min_duration_s = float(cfg.get("min_duration_in_seconds", 0.0))
         max_duration_s = float(cfg.get("max_duration_in_seconds", float("inf")))
 
-        def is_audio_in_length_range(audio: dict[str, Any]) -> bool:
-            sampling_rate = audio.get("sampling_rate") or 1
-            duration_s = len(audio["array"]) / sampling_rate
-            return duration_s > min_duration_s and duration_s < max_duration_s
+        if min_duration_s > 0.0 or math.isfinite(max_duration_s):
+            # `load_from_disk` can hand back the audio column in its encoded
+            # {"path", "bytes"} form, which has no "array" key. Cast it to a
+            # decoded Audio feature so each row exposes {"array", "sampling_rate"}.
+            dataset = dataset.cast_column(audio_col, Audio())
 
-        dataset = dataset.filter(is_audio_in_length_range, input_columns=[audio_col])
+            def is_audio_in_length_range(audio: dict[str, Any]) -> bool:
+                array = audio.get("array")
+                if array is None:
+                    return True
+                sampling_rate = audio.get("sampling_rate") or 1
+                duration_s = len(array) / sampling_rate
+                return duration_s > min_duration_s and duration_s < max_duration_s
+
+            dataset = dataset.filter(is_audio_in_length_range, input_columns=[audio_col])
 
     return dataset
 
